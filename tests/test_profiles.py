@@ -3,7 +3,7 @@
 import pytest
 
 from argilla_cli import profiles
-from argilla_cli.errors import ArgillaCLIError, ProfileDenied
+from argilla_cli.errors import ArgillaCLIError, ProfileDeniedError
 
 
 @pytest.mark.parametrize("path", sorted(profiles.WRITE_COMMANDS))
@@ -13,11 +13,13 @@ def test_full_profile_allows_writes(path):
 
 @pytest.mark.parametrize("path", sorted(profiles.WRITE_COMMANDS))
 def test_read_only_refuses_every_write(path):
-    with pytest.raises(ProfileDenied, match="refuses every write"):
+    with pytest.raises(ProfileDeniedError, match="refuses every write"):
         profiles.enforce_profile(path, "read-only")
 
 
-@pytest.mark.parametrize("path", ["whoami", "info", "datasets list", "records list", "responses export", "datasets export"])
+@pytest.mark.parametrize(
+    "path", ["whoami", "info", "datasets list", "records list", "responses export", "datasets export"]
+)
 def test_read_only_allows_reads(path):
     profiles.enforce_profile(path, "read-only")
 
@@ -39,10 +41,11 @@ def test_non_destructive_never_confirms():
 
 
 def test_delete_and_remove_user_paths_are_destructive():
-    assert profiles.DESTRUCTIVE_COMMANDS == {
+    expected = {
         "workspaces delete",
         "workspaces remove-user",
         "users delete",
         "datasets delete",
         "records delete",
     }
+    assert expected == profiles.DESTRUCTIVE_COMMANDS

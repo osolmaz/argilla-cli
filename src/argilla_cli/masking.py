@@ -7,16 +7,18 @@ the CLI prints, and `mask_mapping()` scrubs structured output such as
 """
 
 import re
+from collections.abc import Container, Iterable
+from typing import Any
 
 REDACTED = "***"
 
 # Keys whose values are secrets in structured data.
-SECRET_KEYS = frozenset({"password", "api_key", "token", "access_token", "authorization"})
+SECRET_KEYS: Container[str] = frozenset({"password", "api_key", "token", "access_token", "authorization"})
 
 _registered: list[str] = []
 
 
-def register_secrets(values) -> None:
+def register_secrets(values: Iterable[str]) -> None:
     """Remember secret values to redact from every later message."""
     for value in values:
         if value and value not in _registered:
@@ -37,14 +39,12 @@ def mask() -> str:
     return REDACTED
 
 
-def mask_mapping(mapping: dict, keys=SECRET_KEYS) -> dict:
+def mask_mapping(mapping: dict[str, Any], keys: Container[str] = SECRET_KEYS) -> dict[str, Any]:
     """Copy a mapping with every secret-keyed value replaced by the mask.
 
     Empty values stay empty: there is nothing to hide.
     """
-    return {
-        key: (REDACTED if key in keys and value else value) for key, value in mapping.items()
-    }
+    return {key: (REDACTED if key in keys and value else value) for key, value in mapping.items()}
 
 
 def redact(text: str) -> str:
@@ -57,7 +57,7 @@ def redact(text: str) -> str:
 
 # A URL query or fragment never carries Argilla credentials, but tokens and
 # keys could end up in a pasted URL; scrub whole query strings too.
-_URL_QUERY = re.compile(r"\?[^\\s]*")
+_URL_QUERY = re.compile(r"\?[^\s]*")
 
 
 def redact_message(text: str) -> str:

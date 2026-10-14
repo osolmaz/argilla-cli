@@ -13,6 +13,7 @@ class TestEmit:
         @click.pass_context
         def _probe(ctx):
             from argilla_cli.output import emit
+
             emit(ctx, [{"name": "ws1", "count": 2}])
 
         result = runner.invoke(main, ["--json", "emit-probe-json"])
@@ -24,6 +25,7 @@ class TestEmit:
         @click.pass_context
         def _probe(ctx):
             from argilla_cli.output import emit
+
             emit(ctx, [{"name": "ws1", "count": 2}], columns=[("name", "NAME"), ("count", "COUNT")])
 
         result = runner.invoke(main, ["emit-probe-table"])
@@ -38,6 +40,7 @@ class TestEmit:
         @click.pass_context
         def _probe(ctx):
             from argilla_cli.output import emit
+
             emit(ctx, {"username": "amelie", "role": "admin"})
 
         result = runner.invoke(main, ["emit-probe-dict"])
@@ -51,6 +54,7 @@ class TestEmit:
         @click.pass_context
         def _probe(ctx):
             from argilla_cli.output import emit
+
             emit(ctx, [])
 
         result = runner.invoke(main, ["emit-probe-empty"])
@@ -62,6 +66,7 @@ class TestEmit:
         @click.pass_context
         def _probe(ctx):
             from argilla_cli.output import emit
+
             emit(ctx, [])
 
         result = runner.invoke(main, ["--json", "emit-probe-empty-json"])
@@ -73,6 +78,7 @@ class TestEmit:
         @click.pass_context
         def _probe(ctx):
             from argilla_cli.output import emit
+
             data = [{"id": "r1", "fields": {"text": "a" * 100}}]
             emit(ctx, data, columns=[("id", "ID")], table=[{"id": "r1"}])
 

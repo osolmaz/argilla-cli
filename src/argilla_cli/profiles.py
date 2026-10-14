@@ -10,7 +10,7 @@ import sys
 
 import click
 
-from argilla_cli.errors import ArgillaCLIError, ProfileDenied
+from argilla_cli.errors import ArgillaCLIError, ProfileDeniedError
 
 PROFILES = {
     "full": "Full access to every command.",
@@ -18,32 +18,36 @@ PROFILES = {
 }
 
 # Command paths that change server state. The read-only profile refuses these.
-WRITE_COMMANDS = frozenset({
-    "workspaces create",
-    "workspaces delete",
-    "workspaces add-user",
-    "workspaces remove-user",
-    "users create",
-    "users delete",
-    "datasets create",
-    "datasets update",
-    "datasets delete",
-    "datasets import",
-    "records add",
-    "records update",
-    "records delete",
-    "responses submit",
-    "suggestions add",
-})
+WRITE_COMMANDS = frozenset(
+    {
+        "workspaces create",
+        "workspaces delete",
+        "workspaces add-user",
+        "workspaces remove-user",
+        "users create",
+        "users delete",
+        "datasets create",
+        "datasets update",
+        "datasets delete",
+        "datasets import",
+        "records add",
+        "records update",
+        "records delete",
+        "responses submit",
+        "suggestions add",
+    }
+)
 
 # Destructive commands ask for confirmation and need --yes without a terminal.
-DESTRUCTIVE_COMMANDS = frozenset({
-    "workspaces delete",
-    "workspaces remove-user",
-    "users delete",
-    "datasets delete",
-    "records delete",
-})
+DESTRUCTIVE_COMMANDS = frozenset(
+    {
+        "workspaces delete",
+        "workspaces remove-user",
+        "users delete",
+        "datasets delete",
+        "records delete",
+    }
+)
 
 
 def is_write(command_path: str) -> bool:
@@ -53,11 +57,9 @@ def is_write(command_path: str) -> bool:
 def enforce_profile(command_path: str, profile: str) -> None:
     """Refuse a write when the profile in force is read-only."""
     if profile not in PROFILES:
-        raise ArgillaCLIError(
-            f"Unknown profile {profile!r}. Known profiles: {', '.join(PROFILES)}."
-        )
+        raise ArgillaCLIError(f"Unknown profile {profile!r}. Known profiles: {', '.join(PROFILES)}.")
     if profile == "read-only" and is_write(command_path):
-        raise ProfileDenied(
+        raise ProfileDeniedError(
             f"'{command_path}' is a write and the '{profile}' profile refuses every write. "
             "Run it with an account whose profile is 'full', or with --profile full."
         )

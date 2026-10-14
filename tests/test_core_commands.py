@@ -48,14 +48,20 @@ def logged_in(isolated_config, mock_http):
     creds_file = isolated_config.parent / "studio.env"
     creds_file.parent.mkdir(parents=True, exist_ok=True)
     creds_file.write_text("USERNAME=amelie\nPASSWORD=filepass\n")
-    isolated_config.write_text(json.dumps({
-        "active_account": "studio",
-        "accounts": {"studio": {
-            "url": URL,
-            "username": "amelie",
-            "credentials_file": str(creds_file),
-        }},
-    }))
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "active_account": "studio",
+                "accounts": {
+                    "studio": {
+                        "url": URL,
+                        "username": "amelie",
+                        "credentials_file": str(creds_file),
+                    }
+                },
+            }
+        )
+    )
     mock_http(default_handler)
     return isolated_config
 
@@ -190,7 +196,7 @@ class TestSetup:
             input="https://studio.example.org\namelie\nsesame\nstudio\nfull\n",
         )
         assert result.exit_code == 0, result.output
-        payload = json.loads(result.output[result.output.index("{"):])
+        payload = json.loads(result.output[result.output.index("{") :])
         assert payload["account"] == "studio"
         assert payload["password"] == "***"
         assert "sesame" not in result.output
@@ -201,11 +207,26 @@ class TestSetup:
 class TestAccountCommands:
     def test_account_list_use_remove(self, runner, isolated_config, mock_http):
         mock_http(default_handler)
-        first = runner.invoke(main, ["--json", "login", "--url", URL, "--username", "amelie",
-                                     "--password", "sesame", "--account", "studio"])
+        first = runner.invoke(
+            main,
+            ["--json", "login", "--url", URL, "--username", "amelie", "--password", "sesame", "--account", "studio"],
+        )
         assert first.exit_code == 0, first.output
-        second = runner.invoke(main, ["--json", "login", "--url", "https://other.example.org", "--username", "bob",
-                                      "--password", "hunter2", "--account", "other"])
+        second = runner.invoke(
+            main,
+            [
+                "--json",
+                "login",
+                "--url",
+                "https://other.example.org",
+                "--username",
+                "bob",
+                "--password",
+                "hunter2",
+                "--account",
+                "other",
+            ],
+        )
         assert second.exit_code == 0, second.output
 
         result = runner.invoke(main, ["--json", "account", "list"])
@@ -230,8 +251,10 @@ class TestAccountCommands:
         assert [a["name"] for a in json.loads(result.output)] == ["studio"]
 
     def test_account_remove_needs_yes_without_terminal(self, runner, isolated_config):
-        runner.invoke(main, ["--json", "login", "--url", URL, "--username", "amelie",
-                             "--password", "sesame", "--account", "studio"])
+        runner.invoke(
+            main,
+            ["--json", "login", "--url", URL, "--username", "amelie", "--password", "sesame", "--account", "studio"],
+        )
         result = runner.invoke(main, ["account", "remove", "studio"])
         assert result.exit_code != 0
         assert "--yes" in result.stderr

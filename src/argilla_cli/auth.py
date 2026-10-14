@@ -14,7 +14,9 @@ rg.Argilla(api_url=..., api_key=...). Tokens and keys stay in memory only.
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+import click
 import httpx
 
 from argilla_cli import masking
@@ -56,6 +58,15 @@ class Credentials:
         """Every secret value these credentials hold, for redaction."""
         return [value for value in (self.password, self.api_key) if value]
 
+    @property
+    def method(self) -> str | None:
+        """The authentication method in force: the API key wins over a password."""
+        if self.api_key:
+            return "api_key"
+        if self.password:
+            return "password"
+        return None
+
 
 def parse_env_file(path: Path | str) -> dict[str, str]:
     """Parse a small env file.
@@ -66,21 +77,29 @@ def parse_env_file(path: Path | str) -> dict[str, str]:
     text = Path(path).read_text(encoding="utf-8")
     values: dict[str, str] = {}
     for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].lstrip()
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
-            value = value[1:-1]
-        if key:
+        parsed = _parse_env_line(raw)
+        if parsed is not None:
+            key, value = parsed
             values[key] = value
     return values
+
+
+def _parse_env_line(raw: str) -> tuple[str, str] | None:
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        return None
+    if line.startswith("export "):
+        line = line[len("export ") :].lstrip()
+    if "=" not in line:
+        return None
+    key, _, value = line.partition("=")
+    key = key.strip()
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        value = value[1:-1]
+    if not key:
+        return None
+    return key, value
 
 
 def credentials_from_file(path: Path | str) -> dict[str, str]:
@@ -99,81 +118,85 @@ def credentials_from_file(path: Path | str) -> dict[str, str]:
     return out
 
 
-def resolve_credentials(ctx=None, flags: dict | None = None, config_path=None) -> Credentials:
+def _read_credentials_file(path_text: str, label: str) -> dict[str, str]:
+    path = Path(path_text).expanduser()
+    if not path.exists():
+        raise CredentialsError(f"Credentials file {path} does not exist{label}.")
+    return credentials_from_file(path)
+
+
+def _resolve_field(
+    key: str,
+    env_name: str | None,
+    sources: list[dict[str, Any]],
+    explicit_values: dict[str, str],
+    entry: dict[str, Any] | None,
+    file_values: dict[str, str],
+) -> tuple[str | None, bool]:
+    """Resolve one credential field: direct sources, env, then the account.
+
+    Returns the value and whether it came from a direct source this run (and
+    may therefore be saved into the config).
+    """
+    value: str | None = None
+    for source in sources:
+        found = source.get(key)
+        if found:
+            value = str(found)
+            break
+    explicit = value is not None
+    if value is None and explicit_values.get(key):
+        value = explicit_values[key]
+    if value is None and env_name:
+        value = os.environ.get(env_name)
+    if value is None and entry is not None:
+        value = file_values.get(key) or entry.get(key) or None
+        if isinstance(value, str) is False and value is not None:
+            value = str(value)
+    return value, explicit
+
+
+def resolve_credentials(
+    ctx: click.Context | None = None,
+    flags: dict[str, Any] | None = None,
+    config_path: Path | None = None,
+) -> Credentials:
     """Resolve credentials: flags, then env, then the named or active account.
 
     ctx:    the click context; its local params (for instance --account on a
             subcommand) come first, then the group-level options in ctx.obj.
     flags:  explicit overrides, used by login for its own options.
-
-    A credentials file passed as a flag counts as a flag: it wins over the
-    environment for the fields it defines. An account that names a credentials
-    file reads that file at run time, and file values win over the values
-    stored in the account entry.
     """
-    obj = (ctx.obj or {}) if ctx else {}
-    params = ctx.params if ctx is not None else {}
-    flags = flags or {}
-
-    def pick(key: str, env_name: str | None):
-        # Direct flags: command-local params, then explicit flag overrides,
-        # then group-level options. The environment comes later, and the
-        # account last -- see pick_with_account below.
-        for source in (flags, params):
-            value = source.get(key)
-            if value:
-                return value
-        value = obj.get(key)
-        if value:
-            return value
-        return None
-
     from argilla_cli import config as config_mod
 
+    obj: dict[str, Any] = (ctx.obj or {}) if ctx is not None else {}
+    params: dict[str, Any] = dict(ctx.params) if ctx is not None else {}
+    direct_sources = [flags or {}, params, obj]
+
     cfg = config_mod.load_config(config_path)
-    account_name = pick("account", None) or config_mod.active_account_name(cfg)
+    account_name = _direct_value("account", direct_sources) or config_mod.active_account_name(cfg)
     entry = config_mod.get_account(cfg, account_name) if account_name else None
 
     # A credentials file passed as a flag counts as a flag-level source.
-    explicit_file = pick("credentials_file", None)
+    explicit_file = _direct_value("credentials_file", direct_sources)
     explicit_values: dict[str, str] = {}
     if explicit_file:
-        path = Path(explicit_file).expanduser()
-        if not path.exists():
-            raise CredentialsError(f"Credentials file {path} does not exist.")
-        explicit_values = credentials_from_file(path)
+        explicit_values = _read_credentials_file(explicit_file, "")
 
-    file_values: dict[str, str] = {}
     account_file: str | None = None
+    file_values: dict[str, str] = {}
     if entry and entry.get("credentials_file"):
-        account_file = str(Path(str(entry["credentials_file"])).expanduser())
-        if not Path(account_file).exists():
-            raise CredentialsError(
-                f"Credentials file {account_file} does not exist (account {account_name!r})."
-            )
-        file_values = credentials_from_file(account_file)
+        account_file = str(entry["credentials_file"])
+        file_values = _read_credentials_file(account_file, f" (account {account_name!r})")
 
-    def pick_with_account(key: str, env_name: str):
-        # Direct flags, then a credentials file passed as a flag, then the
-        # environment, then the account: its credentials file first, then the
-        # values stored in the entry.
-        value = pick(key, None)
-        explicit = bool(value)
-        if not value and explicit_values.get(key):
-            value = explicit_values[key]
-        if not value and env_name:
-            value = os.environ.get(env_name)
-        if not value and entry:
-            if entry_key_value := file_values.get(key):
-                value = entry_key_value
-            elif entry.get(key):
-                value = entry[key]
-        return value, explicit
-
-    url, _ = pick_with_account("url", ENV_URL)
-    username, _ = pick_with_account("username", ENV_USERNAME)
-    password, password_explicit = pick_with_account("password", ENV_PASSWORD)
-    api_key, api_key_explicit = pick_with_account("api_key", ENV_API_KEY)
+    url, _ = _resolve_field("url", ENV_URL, direct_sources, explicit_values, entry, file_values)
+    username, _ = _resolve_field("username", ENV_USERNAME, direct_sources, explicit_values, entry, file_values)
+    password, password_explicit = _resolve_field(
+        "password", ENV_PASSWORD, direct_sources, explicit_values, entry, file_values
+    )
+    api_key, api_key_explicit = _resolve_field(
+        "api_key", ENV_API_KEY, direct_sources, explicit_values, entry, file_values
+    )
 
     creds = Credentials(
         url=url,
@@ -185,11 +208,18 @@ def resolve_credentials(ctx=None, flags: dict | None = None, config_path=None) -
         password_explicit=password_explicit,
         api_key_explicit=api_key_explicit,
     )
-    profile = obj.get("profile") or (entry or {}).get("profile") or "full"
-    creds.profile = profile
+    creds.profile = obj.get("profile") or (entry or {}).get("profile") or "full"
 
     masking.register_secrets(creds.secrets())
     return creds
+
+
+def _direct_value(key: str, sources: list[dict[str, Any]]) -> str | None:
+    for source in sources:
+        found = source.get(key)
+        if found:
+            return str(found)
+    return None
 
 
 def http_client() -> httpx.Client:
@@ -207,6 +237,7 @@ def request_token(url: str, username: str, password: str, client: httpx.Client |
     POST /api/v1/token takes form fields, per the OAuth2 password flow the
     Argilla server implements.
     """
+    masking.register_secrets([password])
     own = client is None
     client = client or http_client()
     try:
@@ -223,14 +254,14 @@ def request_token(url: str, username: str, password: str, client: httpx.Client |
         raise CredentialsError(f"Invalid username or password for {url}.")
     if response.status_code != 200:
         raise CredentialsError(
-            f"Login failed: HTTP {response.status_code} from {url}: "
-            f"{masking.redact_message(response.text[:200])}"
+            f"Login failed: HTTP {response.status_code} from {url}: {masking.redact_message(response.text[:200])}"
         )
-    token = response.json().get("access_token")
+    payload: Any = response.json()
+    token = payload.get("access_token")
     if not token:
         raise CredentialsError("Login response carried no access_token.")
     masking.register_secrets([token])
-    return token
+    return str(token)
 
 
 def request_me(
@@ -238,7 +269,7 @@ def request_me(
     token: str | None = None,
     api_key: str | None = None,
     client: httpx.Client | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Fetch the current user with GET /api/v1/me."""
     headers: dict[str, str] = {}
     if token:
@@ -264,7 +295,8 @@ def request_me(
             f"Could not read the current user: HTTP {response.status_code}: "
             f"{masking.redact_message(response.text[:200])}"
         )
-    return response.json()
+    user: Any = response.json()
+    return user if isinstance(user, dict) else {}
 
 
 def server_version(url: str, client: httpx.Client | None = None) -> str | None:
@@ -284,7 +316,7 @@ def server_version(url: str, client: httpx.Client | None = None) -> str | None:
             return None
         body = response.text.strip().strip('"')
         try:
-            payload = response.json()
+            payload: Any = response.json()
             if isinstance(payload, dict):
                 payload = payload.get("version")
             if isinstance(payload, str):
@@ -297,9 +329,8 @@ def server_version(url: str, client: httpx.Client | None = None) -> str | None:
             client.close()
 
 
-def login_with_password(url: str, username: str, password: str, client: httpx.Client | None = None) -> dict:
+def login_with_password(url: str, username: str, password: str, client: httpx.Client | None = None) -> dict[str, Any]:
     """Full password login: token, then the user. The API key stays in memory."""
-    masking.register_secrets([password])
     token = request_token(url, username, password, client=client)
     user = request_me(url, token=token, client=client)
     api_key = user.get("api_key")
@@ -308,10 +339,9 @@ def login_with_password(url: str, username: str, password: str, client: httpx.Cl
     return user
 
 
-def login_with_api_key(url: str, api_key: str, client: httpx.Client | None = None) -> dict:
+def login_with_api_key(url: str, api_key: str, client: httpx.Client | None = None) -> dict[str, Any]:
     """Verify an API key and return the user it belongs to."""
-    user = request_me(url, api_key=api_key, client=client)
-    return user
+    return request_me(url, api_key=api_key, client=client)
 
 
 def ensure_api_key(creds: Credentials, client: httpx.Client | None = None) -> str:
@@ -329,11 +359,11 @@ def ensure_api_key(creds: Credentials, client: httpx.Client | None = None) -> st
         raise CredentialsError(
             "The server did not return an API key for this user, so the SDK client cannot authenticate."
         )
-    creds.api_key = api_key
-    return api_key
+    creds.api_key = str(api_key)
+    return creds.api_key
 
 
-def build_client(creds: Credentials, client: httpx.Client | None = None):
+def build_client(creds: Credentials, client: httpx.Client | None = None) -> Any:  # noqa: ANN401 -- the SDK client type is the external boundary
     """Construct the official SDK client for these credentials."""
     import argilla as rg  # Imported late: login and doctor do not need the SDK.
 
@@ -341,5 +371,5 @@ def build_client(creds: Credentials, client: httpx.Client | None = None):
     masking.register_secrets([api_key])
     try:
         return rg.Argilla(api_url=creds.url, api_key=api_key)
-    except Exception as exc:  # noqa: BLE001 - surface SDK construction errors redacted
+    except Exception as exc:  # any SDK construction failure is a user-facing credential error
         raise CredentialsError(f"Could not build the Argilla client: {masking.redact_message(str(exc))}") from exc

@@ -138,7 +138,18 @@ class TestLoginCommand:
         mock_http(handler)
         result = runner.invoke(
             main,
-            ["--json", "login", "--url", URL, "--username", "amelie", "--api-key", "apikey-secret-xyz", "--account", "keyed"],
+            [
+                "--json",
+                "login",
+                "--url",
+                URL,
+                "--username",
+                "amelie",
+                "--api-key",
+                "apikey-secret-xyz",
+                "--account",
+                "keyed",
+            ],
         )
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
@@ -153,7 +164,18 @@ class TestLoginCommand:
         mock_http(token_ok_handler)
         result = runner.invoke(
             main,
-            ["--json", "login", "--url", URL, "--username", "amelie", "--credentials-file", str(f), "--account", "filed"],
+            [
+                "--json",
+                "login",
+                "--url",
+                URL,
+                "--username",
+                "amelie",
+                "--credentials-file",
+                str(f),
+                "--account",
+                "filed",
+            ],
         )
         assert result.exit_code == 0, result.output
         cfg = json.loads(isolated_config.read_text())

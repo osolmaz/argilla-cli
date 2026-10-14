@@ -36,12 +36,7 @@ def test_credentials_from_file_bare_names(tmp_path: Path):
 
 def test_credentials_from_file_argilla_names_win(tmp_path: Path):
     f = tmp_path / "creds.env"
-    f.write_text(
-        "USERNAME=other\n"
-        "ARGILLA_USERNAME=amelie\n"
-        "PASSWORD=sesame\n"
-        "ARGILLA_API_KEY=key-123\n"
-    )
+    f.write_text("USERNAME=other\nARGILLA_USERNAME=amelie\nPASSWORD=sesame\nARGILLA_API_KEY=key-123\n")
     values = credentials_from_file(f)
     assert values["username"] == "amelie"
     assert values["password"] == "sesame"

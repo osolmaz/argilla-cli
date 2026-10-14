@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  SLOPHAMMER_VERSION: 0.4.0
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Typecheck (strict)
+        run: uv run mypy
+
+      - name: Test with coverage
+        run: uv run pytest --cov --cov-fail-under=85
+
+      - name: Audit dependencies
+        if: matrix.python-version == '3.13'
+        run: uvx pip-audit --strict
+
+      - name: Duplication check
+        run: uvx slophammer-py@${SLOPHAMMER_VERSION} dry .
+
+      - name: Mutation gate
+        if: matrix.python-version == '3.13'
+        run: uv run python scripts/check-mutation.py --min-kill-rate 65
+
+      - name: Slophammer conformance
+        run: uvx slophammer-py@${SLOPHAMMER_VERSION} check .

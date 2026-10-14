@@ -26,5 +26,5 @@ class CredentialsError(ArgillaCLIError):
     """Credentials are missing, wrong, or the server rejected them."""
 
 
-class ProfileDenied(ArgillaCLIError):
+class ProfileDeniedError(ArgillaCLIError):
     """The active permission profile refuses this command."""

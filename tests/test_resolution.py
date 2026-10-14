@@ -13,17 +13,21 @@ def account_config(isolated_config):
     creds_file = isolated_config.parent / "studio.env"
     creds_file.parent.mkdir(parents=True, exist_ok=True)
     creds_file.write_text("USERNAME=fileuser\nPASSWORD=filepass\n")
-    isolated_config.write_text(json.dumps({
-        "active_account": "studio",
-        "accounts": {
-            "studio": {
-                "url": "https://studio.example.org",
-                "username": "storeduser",
-                "credentials_file": str(creds_file),
-                "profile": "read-only",
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "active_account": "studio",
+                "accounts": {
+                    "studio": {
+                        "url": "https://studio.example.org",
+                        "username": "storeduser",
+                        "credentials_file": str(creds_file),
+                        "profile": "read-only",
+                    }
+                },
             }
-        },
-    }))
+        )
+    )
     return isolated_config
 
 
@@ -34,9 +38,11 @@ class FakeCtx:
 
 
 def test_flags_beat_everything(account_config):
-    creds = auth.resolve_credentials(FakeCtx(
-        obj={"url": "https://flag.example.org", "username": "flaguser", "password": "flagpass"},
-    ))
+    creds = auth.resolve_credentials(
+        FakeCtx(
+            obj={"url": "https://flag.example.org", "username": "flaguser", "password": "flagpass"},
+        )
+    )
     assert creds.url == "https://flag.example.org"
     assert creds.username == "flaguser"
     assert creds.password == "flagpass"
@@ -110,14 +116,20 @@ def test_secrets_registered_for_redaction(account_config):
 
 def test_account_entry_without_file_uses_stored_values(isolated_config):
     isolated_config.parent.mkdir(parents=True, exist_ok=True)
-    isolated_config.write_text(json.dumps({
-        "active_account": "plain",
-        "accounts": {"plain": {
-            "url": "https://plain.example.org",
-            "username": "plainuser",
-            "password": "plainpass",
-        }},
-    }))
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "active_account": "plain",
+                "accounts": {
+                    "plain": {
+                        "url": "https://plain.example.org",
+                        "username": "plainuser",
+                        "password": "plainpass",
+                    }
+                },
+            }
+        )
+    )
     creds = auth.resolve_credentials(FakeCtx())
     assert creds.url == "https://plain.example.org"
     assert creds.username == "plainuser"

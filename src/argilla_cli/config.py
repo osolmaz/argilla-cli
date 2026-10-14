@@ -11,6 +11,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from argilla_cli.errors import ConfigError
 
@@ -35,17 +36,18 @@ def config_path() -> Path:
     return DEFAULT_CONFIG_PATH
 
 
-def load_config(path: Path | None = None) -> dict:
+def load_config(path: Path | None = None) -> dict[str, Any]:
     path = path if path is not None else config_path()
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        loaded: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"could not read config at {path}: {exc}") from exc
+    return loaded if isinstance(loaded, dict) else {}
 
 
-def save_config(data: dict, path: Path | None = None) -> None:
+def save_config(data: dict[str, Any], path: Path | None = None) -> None:
     """Write the whole config, creating the file 0600 and the directory 0700."""
     path = path if path is not None else config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,17 +87,17 @@ def save_config(data: dict, path: Path | None = None) -> None:
         handle.write(content)
 
 
-def get_accounts(config: dict) -> dict:
+def get_accounts(config: dict[str, Any]) -> dict[str, Any]:
     accounts = config.get("accounts")
     return accounts if isinstance(accounts, dict) else {}
 
 
-def get_account(config: dict, name: str) -> dict | None:
+def get_account(config: dict[str, Any], name: str) -> dict[str, Any] | None:
     entry = get_accounts(config).get(name)
     return entry if isinstance(entry, dict) else None
 
 
-def active_account_name(config: dict) -> str | None:
+def active_account_name(config: dict[str, Any]) -> str | None:
     name = config.get("active_account")
     return name if isinstance(name, str) and name else None
 
@@ -103,28 +105,24 @@ def active_account_name(config: dict) -> str | None:
 def validate_account_name(name: str) -> str:
     name = (name or "").strip()
     if not name or any(ch.isspace() for ch in name):
-        raise ConfigError(
-            f"Invalid account name {name!r}: pick a short name without spaces, as in kubectl contexts."
-        )
+        raise ConfigError(f"Invalid account name {name!r}: pick a short name without spaces, as in kubectl contexts.")
     return name
 
 
-def validate_account_entry(entry: dict) -> dict:
+def validate_account_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Check one account entry, returning only the known keys that are set."""
     url = entry.get("url")
     if url is not None and not (isinstance(url, str) and url.startswith(("http://", "https://"))):
         raise ConfigError(f"Account url must start with http:// or https://, got {url!r}.")
     profile = entry.get("profile") or "full"
     if profile not in VALID_PROFILES:
-        raise ConfigError(
-            f"Account profile must be one of {', '.join(VALID_PROFILES)}, got {profile!r}."
-        )
+        raise ConfigError(f"Account profile must be one of {', '.join(VALID_PROFILES)}, got {profile!r}.")
     cleaned = {key: entry[key] for key in ACCOUNT_KEYS if entry.get(key) is not None}
     cleaned.setdefault("profile", profile)
     return cleaned
 
 
-def save_account(name: str, entry: dict, path: Path | None = None) -> None:
+def save_account(name: str, entry: dict[str, Any], path: Path | None = None) -> None:
     """Create or update one account entry and make it the active account."""
     name = validate_account_name(name)
     entry = validate_account_entry(entry)
@@ -147,17 +145,17 @@ def set_active_account(name: str, path: Path | None = None) -> None:
     save_config(config, path)
 
 
-def remove_account(name: str, path: Path | None = None) -> dict:
+def remove_account(name: str, path: Path | None = None) -> dict[str, Any]:
     """Remove an account. Returns the removed entry."""
     name = validate_account_name(name)
     config = load_config(path)
     accounts = get_accounts(config)
     if name not in accounts:
         raise ConfigError(f"No account named {name!r}. Run `argilla-cli account list` to see accounts.")
-    entry = accounts.pop(name)
+    removed: dict[str, Any] = accounts.pop(name)
     config["accounts"] = accounts
     if active_account_name(config) == name:
         remaining = sorted(accounts)
         config["active_account"] = remaining[0] if remaining else None
     save_config(config, path)
-    return entry
+    return removed

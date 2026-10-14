@@ -24,16 +24,81 @@ argilla-cli = "argilla_cli.cli:main_entry"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "mutmut>=3.2",
+    "types-pyyaml>=6.0",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/argilla_cli"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 # Integration tests spin up Docker containers and the studio smoke test
 # touches a live server; both run only when asked for by marker.
-addopts = "-m 'not integration and not studio'"
+addopts = "-m 'not integration and not studio' --strict-markers"
 markers = [
     "integration: end-to-end tests that run a real Argilla server in Docker (run with -m integration)",
     "studio: read-only smoke tests against studio.legalbenchmarks.ai (run with -m studio)",
 ]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+python_version = "3.10"
+
+[[tool.mypy.overrides]]
+module = "argilla.*"
+# The SDK is installed and typed enough for the calls we make; any gaps are
+# pinned at argilla==2.8.0 and exercised by the integration tests.
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # imports sorted
+    "N",        # naming
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "C4",       # comprehensions
+    "SIM",      # simplify
+    "RUF",      # ruff-specific
+    "ANN",      # annotations on public functions and helpers
+    "C90",      # complexity at most 8 (see mccabe below)
+    "TID",      # absolute imports
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use fixtures and asserts that do not need annotations, and the
+# fixtures directory is not production code.
+"tests/**" = ["ANN", "S101"]
+
+[tool.coverage.run]
+source = ["argilla_cli"]
+omit = ["src/argilla_cli/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+
+[tool.mutmut]
+# The whole package: every production file is copied into mutants/ and
+# mutated. The kill-rate floor lives in the CI mutation gate and ratchets up
+# as survivors are triaged (it started at 65 against a measured 67.4%).
+source_paths = ["src/argilla_cli"]
+# The mutants/ copy must build and test like the real tree.
+also_copy = ["README.md", "uv.lock", "tests"]
+
+[tool.hatch.metadata]
+allow-direct-references = false

@@ -6,6 +6,7 @@ output (--json), and safety (--yes, --profile) for every command. Errors print
 one redacted line, never a traceback, and exit non-zero.
 """
 
+import contextlib
 import sys
 
 import click
@@ -26,12 +27,10 @@ def _force_utf8_output() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
             continue
-        try:
+        # A wrapped or detached stream (pytest, some CI harnesses) cannot be
+        # reconfigured; leaving it alone is better than failing to start.
+        with contextlib.suppress(ValueError, OSError, AttributeError):
             reconfigure(encoding="utf-8", errors="replace")
-        except (ValueError, OSError, AttributeError):
-            # A wrapped or detached stream (pytest, some CI harnesses) cannot
-            # be reconfigured; leaving it alone is better than failing.
-            pass
 
 
 @click.group()
@@ -44,21 +43,33 @@ def _force_utf8_output() -> None:
     message="%(prog)s version %(version)s",
 )
 @click.option("--json", "use_json", is_flag=True, default=False, help="Output as JSON.")
-@click.option("--yes", "-y", is_flag=True, default=False,
-              help="Skip confirmation prompts for destructive actions.")
-@click.option("--profile", "profile", default=None,
-              type=click.Choice(["full", "read-only"]),
-              help="Override the account's permission profile for this invocation.")
-@click.option("--account", "account", default=None,
-              help="Use this named account instead of the active one.")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation prompts for destructive actions.")
+@click.option(
+    "--profile",
+    "profile",
+    default=None,
+    type=click.Choice(["full", "read-only"]),
+    help="Override the account's permission profile for this invocation.",
+)
+@click.option("--account", "account", default=None, help="Use this named account instead of the active one.")
 @click.option("--url", "url", default=None, help="Argilla server URL.")
 @click.option("--username", "username", default=None, help="Account username.")
 @click.option("--password", "password", default=None, help="Account password.")
 @click.option("--api-key", "api_key", default=None, help="API key.")
-@click.option("--credentials-file", "credentials_file", default=None,
-              help="Path to an env file with credentials.")
+@click.option("--credentials-file", "credentials_file", default=None, help="Path to an env file with credentials.")
 @click.pass_context
-def main(ctx, use_json, yes, profile, account, url, username, password, api_key, credentials_file):
+def main(
+    ctx: click.Context,
+    use_json: bool,
+    yes: bool,
+    profile: str | None,
+    account: str | None,
+    url: str | None,
+    username: str | None,
+    password: str | None,
+    api_key: str | None,
+    credentials_file: str | None,
+) -> None:
     """argilla-cli -- Argilla 2.x from the terminal, for humans and agents."""
     _force_utf8_output()
     ctx.ensure_object(dict)
@@ -94,6 +105,6 @@ def main_entry() -> None:
         sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(130)
-    except Exception as exc:  # noqa: BLE001 - no traceback escapes to the user
+    except Exception as exc:  # a traceback never escapes to the user
         click.echo(f"Error: {masking.redact_message(str(exc))}", err=True)
         sys.exit(1)

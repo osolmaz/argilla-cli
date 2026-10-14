@@ -26,16 +26,14 @@ def no_network(monkeypatch):
         if isinstance(self._transport, httpx.MockTransport):
             return real_send(self, request, **kwargs)
         raise AssertionError(
-            "test attempted a real HTTP request; patch argilla_cli.auth helpers "
-            "or use httpx.MockTransport instead"
+            "test attempted a real HTTP request; patch argilla_cli.auth helpers or use httpx.MockTransport instead"
         )
 
     async def guarded_async_send(self, request, **kwargs):
         if isinstance(self._transport, httpx.MockTransport):
             return await real_async_send(self, request, **kwargs)
         raise AssertionError(
-            "test attempted a real HTTP request; patch argilla_cli.auth helpers "
-            "or use httpx.MockTransport instead"
+            "test attempted a real HTTP request; patch argilla_cli.auth helpers or use httpx.MockTransport instead"
         )
 
     monkeypatch.setattr(httpx.Client, "send", guarded_send)
@@ -61,6 +59,7 @@ def isolated_config(monkeypatch, tmp_path):
 @pytest.fixture()
 def runner():
     from click.testing import CliRunner
+
     return CliRunner()
 
 
@@ -81,5 +80,6 @@ def mock_http(monkeypatch):
         return httpx.Client(transport=httpx.MockTransport(state["handler"]))
 
     from argilla_cli import auth
+
     monkeypatch.setattr(auth, "http_client", fake_http_client)
     return set_handler

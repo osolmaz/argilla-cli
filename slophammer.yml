@@ -1,0 +1,28 @@
+python:
+  coverage:
+    threshold: 85
+    paths:
+      - src
+  complexity:
+    max: 8
+  dry:
+    max_findings: 0
+    paths:
+      - src
+    copied_blocks:
+      enabled: true
+      min_tokens: 100
+  mutation:
+    targets:
+      - src/argilla_cli/auth.py
+      - src/argilla_cli/config.py
+  dependency_boundaries:
+    # Command modules may use the core modules; the core must not import the
+    # commands, and the CLI entry imports the commands.
+    - from: src/argilla_cli/commands
+      allow:
+        - src/argilla_cli
+    - from: src/argilla_cli/cli
+      allow:
+        - src/argilla_cli/commands
+        - src/argilla_cli

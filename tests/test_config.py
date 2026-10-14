@@ -1,6 +1,5 @@
 """Tests for the config file and named accounts."""
 
-import json
 import os
 
 import pytest

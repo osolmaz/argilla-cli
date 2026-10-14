@@ -2,6 +2,8 @@
 
 import json
 
+import httpx
+
 from argilla_cli import masking
 from argilla_cli.cli import main
 
@@ -20,13 +22,15 @@ def test_register_ignores_empty_and_duplicates():
 
 
 def test_mask_mapping():
-    masked = masking.mask_mapping({
-        "password": "sesame",
-        "api_key": "key-123",
-        "url": "https://x.example.org",
-        "empty_password": "",
-        "name": "amelie",
-    })
+    masked = masking.mask_mapping(
+        {
+            "password": "sesame",
+            "api_key": "key-123",
+            "url": "https://x.example.org",
+            "empty_password": "",
+            "name": "amelie",
+        }
+    )
     assert masked == {
         "password": "***",
         "api_key": "***",
@@ -45,15 +49,21 @@ def test_redact_message_scrubs_url_queries():
 
 def test_config_show_masks_secrets(runner, isolated_config):
     isolated_config.parent.mkdir(parents=True, exist_ok=True)
-    isolated_config.write_text(json.dumps({
-        "active_account": "studio",
-        "accounts": {"studio": {
-            "url": "https://studio.example.org",
-            "username": "amelie",
-            "password": "sesame-super-secret",
-            "api_key": "apikey-super-secret",
-        }},
-    }))
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "active_account": "studio",
+                "accounts": {
+                    "studio": {
+                        "url": "https://studio.example.org",
+                        "username": "amelie",
+                        "password": "sesame-super-secret",
+                        "api_key": "apikey-super-secret",
+                    }
+                },
+            }
+        )
+    )
     result = runner.invoke(main, ["config", "show"])
     assert result.exit_code == 0, result.output
     assert "sesame-super-secret" not in result.output
@@ -63,14 +73,20 @@ def test_config_show_masks_secrets(runner, isolated_config):
 
 def test_config_show_json_masks_secrets(runner, isolated_config):
     isolated_config.parent.mkdir(parents=True, exist_ok=True)
-    isolated_config.write_text(json.dumps({
-        "active_account": "studio",
-        "accounts": {"studio": {
-            "url": "https://studio.example.org",
-            "username": "amelie",
-            "password": "sesame-super-secret",
-        }},
-    }))
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "active_account": "studio",
+                "accounts": {
+                    "studio": {
+                        "url": "https://studio.example.org",
+                        "username": "amelie",
+                        "password": "sesame-super-secret",
+                    }
+                },
+            }
+        )
+    )
     result = runner.invoke(main, ["--json", "config", "show"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
