@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 STATUS_CHOICES = ("draft", "submitted", "discarded")
 
 
-def _status_label(status: Any) -> str | None:  # noqa: ANN401 - enum or plain string from the SDK
+def _status_label(status: Any) -> str | None:  # noqa: ANN401 -- enum or plain string from the SDK
     """Render the SDK's ResponseStatus enum as its plain name."""
     if status is None:
         return None
@@ -44,7 +44,7 @@ def _question_names(dataset: Dataset) -> dict[str, str]:
     return {str(question.id): question.name for question in dataset.settings.questions}
 
 
-def _usernames(client: Any) -> dict[str, str]:  # noqa: ANN401 - SDK client surface is wide
+def _usernames(client: Any) -> dict[str, str]:  # noqa: ANN401 -- SDK client surface is wide
     return {str(user.id): user.username for user in client.users}
 
 
@@ -78,7 +78,7 @@ def _iter_response_rows(
     return rows
 
 
-def _resolve_record_id(dataset: Dataset, record_ref: str) -> Any:  # noqa: ANN401 - a server UUID crosses here
+def _resolve_record_id(dataset: Dataset, record_ref: str) -> Any:  # noqa: ANN401 -- a server UUID crosses here
     """Accept a server record id (UUID) or an external id."""
     from uuid import UUID, uuid4
 

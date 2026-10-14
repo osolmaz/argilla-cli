@@ -129,7 +129,7 @@ def _load_settings_document(path: str) -> dict[str, Any]:
     return document
 
 
-def _settings_from_document(document: dict[str, Any]) -> Any:  # noqa: ANN401 - SDK Settings type is the boundary
+def _settings_from_document(document: dict[str, Any]) -> Any:  # noqa: ANN401 -- SDK Settings type is the boundary
     """Build SDK settings from a document. `_from_dict` is the SDK's own
     loader (its from_json calls it); it accepts the same shape as serialize."""
     import argilla as rg
@@ -319,14 +319,14 @@ def datasets_get(
         click.echo(rendered, nl=False)
 
 
-def _metadata_dict(metadata: Any) -> dict[str, Any]:  # noqa: ANN401 - server metadata shape varies
+def _metadata_dict(metadata: Any) -> dict[str, Any]:  # noqa: ANN401 -- server metadata shape varies
     """Metadata as a name/value dict, whatever shape the server returned."""
     if isinstance(metadata, dict):
         return dict(metadata)
     return {item.name: item.value for item in metadata or []}
 
 
-def _export_line(model: Any, qmap: dict[str, str], umap: dict[str, str]) -> dict[str, Any]:  # noqa: ANN401 - a RecordModel crosses here
+def _export_line(model: Any, qmap: dict[str, str], umap: dict[str, str]) -> dict[str, Any]:  # noqa: ANN401 -- a RecordModel crosses here
     """One JSONL line: the flat record plus its responses."""
     line: dict[str, Any] = {"id": model.external_id if model.external_id is not None else str(model.id)}
     line.update(model.fields or {})
