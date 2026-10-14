@@ -1,40 +1,14 @@
 """Unit tests for the workspaces, users, and datasets commands.
 
 Each test drives real ``argilla`` resource classes over the in-memory fake
-client, so no network is involved.
+client (see conftest.py for the fake_ctx and invoke fixtures), so no network
+is involved.
 """
 
 import json
 from uuid import uuid4
 
-import pytest
-from click.testing import CliRunner
-from tests.fakes import FakeClient
-
-from argilla_cli import config as config_mod
-from argilla_cli.cli import main
-
-FAKE_URL = "https://fake.example.org"
-FAKE_KEY = "fake-key-0000"
-
-
-@pytest.fixture()
-def fake_ctx(isolated_config, monkeypatch):
-    """An isolated config with one API-key account, and a fake client."""
-    config_mod.save_account("fake", {"url": FAKE_URL, "api_key": FAKE_KEY}, path=isolated_config)
-    client = FakeClient()
-    monkeypatch.setattr("argilla_cli.commands.helpers.auth.build_client", lambda creds: client)
-    # SDK resource factories (Field.from_model and friends) fall back to the
-    # class-level default client; point it at the fake, as a real client
-    # constructor would.
-    monkeypatch.setattr("argilla.Argilla._default_client", client)
-    return client
-
-
-def invoke(fake_ctx, args, **kwargs):
-    runner = CliRunner()
-    return runner.invoke(main, args, obj={}, **kwargs)
-
+from tests.helpers import invoke
 
 WS_ID = uuid4()
 USER_ID = uuid4()

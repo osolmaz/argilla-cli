@@ -5,6 +5,8 @@ import pytest
 
 from argilla_cli import masking
 
+__all__ = ["fake_ctx", "isolated_config", "mock_http", "no_network", "runner"]
+
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
@@ -61,6 +63,27 @@ def runner():
     from click.testing import CliRunner
 
     return CliRunner()
+
+
+FAKE_URL = "https://fake.example.org"
+FAKE_KEY = "fake-key-0000"
+
+
+@pytest.fixture()
+def fake_ctx(isolated_config, monkeypatch):
+    """An isolated config with one API-key account, and a fake client."""
+    from tests.fakes import FakeClient
+
+    from argilla_cli import config as config_mod
+
+    config_mod.save_account("fake", {"url": FAKE_URL, "api_key": FAKE_KEY}, path=isolated_config)
+    client = FakeClient()
+    monkeypatch.setattr("argilla_cli.commands.helpers.auth.build_client", lambda creds: client)
+    # SDK resource factories (Field.from_model and friends) fall back to the
+    # class-level default client; point it at the fake, as a real client
+    # constructor would.
+    monkeypatch.setattr("argilla.Argilla._default_client", client)
+    return client
 
 
 @pytest.fixture()
