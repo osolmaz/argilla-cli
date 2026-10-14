@@ -16,6 +16,7 @@ dependencies = [
     "argilla==2.8.0",
     # `datasets get --settings --format yaml` needs a YAML dumper.
     "pyyaml>=6.0",
+    "requests>=2.34.2",
 ]
 
 [project.scripts]
@@ -36,6 +37,7 @@ packages = ["src/argilla_cli"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 # Integration tests spin up Docker containers and the studio smoke test
 # touches a live server; both run only when asked for by marker.
 addopts = "-m 'not integration and not studio' --strict-markers"

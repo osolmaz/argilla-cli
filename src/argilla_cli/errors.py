@@ -28,3 +28,7 @@ class CredentialsError(ArgillaCLIError):
 
 class ProfileDeniedError(ArgillaCLIError):
     """The active permission profile refuses this command."""
+
+
+class NotFoundError(ArgillaCLIError):
+    """The named resource does not exist on the server."""
