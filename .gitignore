@@ -3,7 +3,10 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+.coverage
+coverage.xml
 dist/
 build/
+mutants/
 mutants/
 .mutmut-cache
