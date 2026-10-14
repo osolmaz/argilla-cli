@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "argilla-cli"
+version = "0.1.0"
+description = "Argilla 2.x command-line client for humans and agents"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Onur Solmaz" }]
+dependencies = [
+    "click>=8.1",
+    # Official SDK, pinned to match the Argilla 2.8.0dev0 studio server.
+    "argilla==2.8.0",
+    # `datasets get --settings --format yaml` needs a YAML dumper.
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+argilla-cli = "argilla_cli.cli:main_entry"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/argilla_cli"]
+
+[tool.pytest.ini_options]
+# Integration tests spin up Docker containers and the studio smoke test
+# touches a live server; both run only when asked for by marker.
+addopts = "-m 'not integration and not studio'"
+markers = [
+    "integration: end-to-end tests that run a real Argilla server in Docker (run with -m integration)",
+    "studio: read-only smoke tests against studio.legalbenchmarks.ai (run with -m studio)",
+]
