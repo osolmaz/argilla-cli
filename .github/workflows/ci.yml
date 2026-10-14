@@ -42,12 +42,14 @@ jobs:
         if: matrix.python-version == '3.13'
         run: uvx pip-audit --strict
 
+      # slophammer-py needs Python >= 3.12; the matrix python only governs
+      # the project env, not the tool env.
       - name: Duplication check
-        run: uvx slophammer-py@${SLOPHAMMER_VERSION} dry .
+        run: uvx --python 3.13 slophammer-py@${SLOPHAMMER_VERSION} dry .
 
       - name: Mutation gate
         if: matrix.python-version == '3.13'
         run: uv run python scripts/check-mutation.py --min-kill-rate 65
 
       - name: Slophammer conformance
-        run: uvx slophammer-py@${SLOPHAMMER_VERSION} check .
+        run: uvx --python 3.13 slophammer-py@${SLOPHAMMER_VERSION} check .
