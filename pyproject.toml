@@ -42,8 +42,8 @@ pythonpath = ["."]
 # touches a live server; both run only when asked for by marker.
 addopts = "-m 'not integration and not studio' --strict-markers"
 markers = [
-    "integration: end-to-end tests that run a real Argilla server in Docker (run with -m integration)",
-    "studio: read-only smoke tests against studio.legalbenchmarks.ai (run with -m studio)",
+    "integration: end-to-end tests that run a real Argilla server in Docker (run with -m integration and ARGILLA_CLI_INTEGRATION=1)",
+    "studio: read-only smoke tests against studio.legalbenchmarks.ai (run with -m studio and ARGILLA_CLI_STUDIO=1)",
 ]
 
 [tool.mypy]

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from tests.helpers import invoke
+from tests.helpers import invoke, set_profile
 
 WS_SETTINGS = {
     "fields": [{"name": "prompt", "title": "Prompt", "required": True, "settings": {"type": "text"}}],
@@ -115,22 +115,10 @@ class TestDatasetsCreate:
         assert fake_ctx.api.datasets.models == []
 
     def test_read_only_profile_refuses(self, fake_ctx, isolated_config):
-        config_mod_set_profile(isolated_config, "read-only")
+        set_profile(isolated_config, "read-only")
         result = invoke(fake_ctx, ["datasets", "create", "briefs"])
         assert result.exit_code == 1
         assert "read-only" in result.output
-
-
-def config_mod_set_profile(config_path, profile):
-    from argilla_cli import config as config_mod
-
-    config = config_mod.load_config(config_path)
-    config["accounts"]["fake"]["profile"] = profile
-    config_mod.save_config(config, config_path)
-    # save_config makes the first named account active; restore it.
-    config = config_mod.load_config(config_path)
-    config["active_account"] = "fake"
-    config_mod.save_config(config, config_path)
 
 
 class TestDatasetsUpdate:
@@ -265,7 +253,7 @@ class TestRecordsAdd:
         assert result.exit_code == 1
 
     def test_read_only_profile_refuses(self, fake_ctx, dataset, isolated_config, tmp_path):
-        config_mod_set_profile(isolated_config, "read-only")
+        set_profile(isolated_config, "read-only")
         records_file = tmp_path / "records.jsonl"
         records_file.write_text(json.dumps({"id": "r1", "prompt": "one"}) + "\n")
         result = invoke(fake_ctx, ["records", "add", "contracts", "--file", str(records_file)])

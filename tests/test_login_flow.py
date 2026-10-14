@@ -90,10 +90,13 @@ class TestLoginWithPassword:
         mock_http(handler)
         with pytest.raises(auth.CredentialsError) as exc_info:
             auth.login_with_password(URL, "amelie", "sesame")
-        # The password was registered when login started, so the server's
-        # echo of it cannot survive into the error message.
-        assert "sesame" not in str(exc_info.value)
-        assert "***" in str(exc_info.value)
+        # The password was registered when login started, and the error
+        # message never quotes a response body: a server echo of a secret
+        # cannot survive into the error message at all.
+        message = str(exc_info.value)
+        assert "sesame" not in message
+        assert "denied for user" not in message
+        assert "HTTP 403" in message
 
 
 class TestLoginWithApiKey:

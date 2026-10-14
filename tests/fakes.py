@@ -130,6 +130,12 @@ class FakeRecordsAPI:
         self.models = [model for model in self.models if model.id != record_id]
         self.dataset_ids.pop(record_id, None)
 
+    def create_record_response(self, record_id: UUID, response: Any) -> None:
+        stored = self.get(record_id)
+        if stored is None:
+            raise KeyError(str(record_id))
+        stored.responses = [*list(stored.responses or []), response]
+
     def bulk_upsert(self, dataset_id: UUID, records: list[Any]) -> tuple[list[Any], int]:
         """Upsert by external_id, mirroring the server's response shape."""
         updated = 0
@@ -147,6 +153,8 @@ class FakeRecordsAPI:
                 stored = self.get(existing_id)
                 stored.fields = incoming.fields
                 stored.metadata = incoming.metadata
+                stored.suggestions = incoming.suggestions
+                stored.responses = incoming.responses
                 updated += 1
                 result.append(stored)
             else:
@@ -226,10 +234,12 @@ class FakeDatasetsManager:
     def __init__(self, client: "FakeClient") -> None:
         self._client = client
 
-    def __call__(self, name: str, workspace: Any | None = None) -> Dataset | None:
+    def __call__(self, name: str | None = None, workspace: Any | None = None, id: Any | None = None) -> Dataset | None:
         workspace_id = workspace.id if workspace is not None else None
         for model in self._client.api.datasets.models:
-            if model.name != name:
+            if id is not None and model.id != id:
+                continue
+            if name is not None and model.name != name:
                 continue
             if workspace_id is not None and model.workspace_id != workspace_id:
                 continue

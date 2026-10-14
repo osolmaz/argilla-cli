@@ -18,6 +18,7 @@ from argilla_cli.commands.helpers import (
     sdk_call,
     with_account,
 )
+from argilla_cli.commands.responses import _status_label
 from argilla_cli.errors import ArgillaCLIError
 from argilla_cli.output import emit
 from argilla_cli.profiles import confirm_destructive, enforce_profile
@@ -315,4 +316,118 @@ def datasets_get(
         click.echo(rendered, nl=False)
 
 
-__all__ = ["_dataset_detail", "_dataset_row", "datasets"]
+def _metadata_dict(metadata: Any) -> dict[str, Any]:  # noqa: ANN401 - server metadata shape varies
+    """Metadata as a name/value dict, whatever shape the server returned."""
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    return {item.name: item.value for item in metadata or []}
+
+
+def _export_line(model: Any, qmap: dict[str, str], umap: dict[str, str]) -> dict[str, Any]:  # noqa: ANN401 - a RecordModel crosses here
+    """One JSONL line: the flat record plus its responses."""
+    line: dict[str, Any] = {"id": model.external_id if model.external_id is not None else str(model.id)}
+    line.update(model.fields or {})
+    line.update(_metadata_dict(model.metadata))
+    for suggestion in model.suggestions or []:
+        name = suggestion.question_name or qmap.get(str(suggestion.question_id))
+        if name is not None:
+            line[name] = suggestion.value
+    rows = []
+    for response in model.responses or []:
+        for qid, payload in (response.values or {}).items():
+            rows.append(
+                {
+                    "question": qmap.get(qid, qid),
+                    "value": (payload or {}).get("value"),
+                    "user": umap.get(str(response.user_id)) if response.user_id else None,
+                    "status": _status_label(response.status),
+                }
+            )
+    if rows:
+        line["responses"] = rows
+    return line
+
+
+@datasets.command("export")
+@click.argument("name")
+@click.option("--workspace", "workspace_name", default=None, help="The dataset's workspace, when ambiguous.")
+@click.option(
+    "-o", "--output", "output_path", required=True, type=click.Path(dir_okay=False), help="The JSONL file to write."
+)
+@with_account
+@click.pass_context
+def datasets_export(
+    ctx: click.Context,
+    name: str,
+    workspace_name: str | None,
+    output_path: str,
+    account: str | None,
+) -> None:
+    """Write the dataset NAME's records, suggestions, and responses as JSONL.
+
+    Each line is a flat record (field and metadata names as keys, question
+    names holding their suggestion values) plus a 'responses' list. Import
+    reads the same format back; responses are kept for review and are not
+    re-submitted on import, so no answer is filed twice or under the wrong
+    user.
+    """
+    import os
+
+    client = get_client(ctx)
+    dataset = find_dataset(client, name, find_workspace(client, workspace_name) if workspace_name else None)
+    sdk_call(lambda: dataset.get(), f"Fetching dataset {name}")
+    qmap = {str(question.id): question.name for question in dataset.settings.questions}
+    umap = {str(user.id): user.username for user in client.users}
+    if os.path.exists(output_path):
+        raise ArgillaCLIError(f"{output_path} already exists; remove it or pick another name.")
+
+    count = 0
+    with open(output_path, "w", encoding="utf-8") as handle:
+        for record in dataset.records(with_suggestions=True, with_responses=True):
+            handle.write(json.dumps(_export_line(record._model, qmap, umap), ensure_ascii=False) + "\n")
+            count += 1
+    emit(ctx, {"action": "export", "resource": "records", "dataset": name, "records": count, "output": output_path})
+
+
+@datasets.command("import")
+@click.argument("name")
+@click.argument("file_path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--dry-run", is_flag=True, default=False, help="Count the records without sending them.")
+@with_account
+@click.pass_context
+def datasets_import(ctx: click.Context, name: str, file_path: str, dry_run: bool, account: str | None) -> None:
+    """Load records from FILE (as written by export) into the dataset NAME."""
+    from argilla_cli.commands.records import _load_records
+
+    enforce_profile("datasets import", profile_in_force(ctx))
+    items = _load_records(file_path)
+    responses = sum(len(item.get("responses") or []) for item in items)
+    records = [{key: value for key, value in item.items() if key != "responses"} for item in items]
+    client = get_client(ctx)
+    dataset = find_dataset(client, name)
+    if dry_run:
+        emit(
+            ctx,
+            {
+                "action": "import",
+                "dataset": name,
+                "records": len(records),
+                "responses_kept_for_review": responses,
+                "dry_run": True,
+            },
+        )
+        return
+    sdk_call(lambda: dataset.get(), f"Fetching dataset {name}")
+    sdk_call(lambda: dataset.records.log(records), "Importing records")
+    emit(
+        ctx,
+        {
+            "action": "import",
+            "dataset": name,
+            "records": len(records),
+            "responses_kept_for_review": responses,
+        },
+    )
+
+
+__all__ = ["_dataset_detail", "_dataset_row", "_export_line", "datasets"]

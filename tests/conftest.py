@@ -9,8 +9,8 @@ __all__ = ["fake_ctx", "isolated_config", "mock_http", "no_network", "runner"]
 
 
 @pytest.fixture(autouse=True)
-def no_network(monkeypatch):
-    """Fail loudly if a test tries a real HTTP request.
+def no_network(request, monkeypatch):
+    """Fail loudly if a unit test tries a real HTTP request.
 
     Modeled on discli's autouse no_network fixture. Patching at the HTTP layer
     catches a test that drives the CLI end to end and falls back to the
@@ -19,8 +19,12 @@ def no_network(monkeypatch):
 
     httpx.MockTransport clients still go through, so a unit test may exercise
     request parsing against a mock transport; a mock transport never touches
-    the network.
+    the network. The integration and studio tests are marked on purpose and
+    pass through unguarded.
     """
+    if {"integration", "studio"} & {mark.name for mark in request.node.iter_markers()}:
+        yield
+        return
     real_send = httpx.Client.send
     real_async_send = httpx.AsyncClient.send
 
@@ -40,6 +44,7 @@ def no_network(monkeypatch):
 
     monkeypatch.setattr(httpx.Client, "send", guarded_send)
     monkeypatch.setattr(httpx.AsyncClient, "send", guarded_async_send)
+    yield
 
 
 @pytest.fixture(autouse=True)

@@ -252,10 +252,9 @@ def request_token(url: str, username: str, password: str, client: httpx.Client |
             client.close()
     if response.status_code == 401:
         raise CredentialsError(f"Invalid username or password for {url}.")
-    if response.status_code != 200:
-        raise CredentialsError(
-            f"Login failed: HTTP {response.status_code} from {url}: {masking.redact_message(response.text[:200])}"
-        )
+    if response.status_code not in (200, 201):
+        # The body may carry the access token: never quote it back.
+        raise CredentialsError(f"Login failed: HTTP {response.status_code} from {url}.")
     payload: Any = response.json()
     token = payload.get("access_token")
     if not token:
@@ -291,10 +290,7 @@ def request_me(
     if response.status_code == 401:
         raise CredentialsError(f"The server at {url} rejected these credentials (HTTP 401).")
     if response.status_code != 200:
-        raise CredentialsError(
-            f"Could not read the current user: HTTP {response.status_code}: "
-            f"{masking.redact_message(response.text[:200])}"
-        )
+        raise CredentialsError(f"Could not read the current user: HTTP {response.status_code} from {url}.")
     user: Any = response.json()
     return user if isinstance(user, dict) else {}
 

@@ -16,6 +16,8 @@ from argilla_cli.commands.account import account_group, config_group, login_cmd
 from argilla_cli.commands.core import doctor_cmd, info_cmd, setup_cmd, whoami_cmd
 from argilla_cli.commands.datasets import datasets as datasets_group
 from argilla_cli.commands.records import records as records_group
+from argilla_cli.commands.responses import responses as responses_group
+from argilla_cli.commands.suggestions import suggestions as suggestions_group
 from argilla_cli.commands.users import users as users_group
 from argilla_cli.commands.workspaces import workspaces as workspaces_group
 
@@ -99,6 +101,8 @@ main.add_command(workspaces_group)
 main.add_command(users_group)
 main.add_command(datasets_group)
 main.add_command(records_group)
+main.add_command(responses_group)
+main.add_command(suggestions_group)
 
 
 def main_entry() -> None:

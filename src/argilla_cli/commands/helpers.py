@@ -74,11 +74,25 @@ def find_user(client: ArgillaClient, username: str) -> Resource:
 
 
 def find_dataset(client: ArgillaClient, name: str, workspace: Resource | None = None) -> Resource:
-    dataset = quiet_call(lambda: client.datasets(name, workspace=workspace))
-    if dataset is None:
-        label = f" in workspace {workspace.name!r}" if workspace is not None else ""
-        raise NotFoundError(f"No dataset named {name!r}{label} on this server.")
-    return dataset
+    if workspace is not None:
+        dataset = quiet_call(lambda: client.datasets(name, workspace=workspace))
+        if dataset is None:
+            raise NotFoundError(f"No dataset named {name!r} in workspace {workspace.name!r}.")
+        return dataset
+    dataset = quiet_call(lambda: client.datasets(name))
+    if dataset is not None:
+        return dataset
+    # The default workspace may not hold the dataset: scan the server.
+    matches = [model for model in client.api.datasets.list() if model.name == name]
+    if len(matches) > 1:
+        raise NotFoundError(
+            f"Several datasets named {name!r} exist in different workspaces. Pass --workspace to pick one."
+        )
+    if matches:
+        found = quiet_call(lambda: client.datasets(id=matches[0].id))
+        if found is not None:
+            return found
+    raise NotFoundError(f"No dataset named {name!r} on this server.")
 
 
 def default_workspace(client: ArgillaClient) -> Resource:
