@@ -7,6 +7,10 @@ fakes mirror just that surface, so the command layer is tested with the real
 on top of an in-memory store - no network.
 """
 
+# Deferred annotations: the classes below define methods named like builtins
+# (list, get), and a method annotation must not resolve to that method.
+from __future__ import annotations
+
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
@@ -196,7 +200,7 @@ class FakeSettingsAPI:
 class FakeWorkspacesManager:
     """Mirrors argilla.workspaces.Workspaces: callable lookup + iteration."""
 
-    def __init__(self, client: "FakeClient") -> None:
+    def __init__(self, client: FakeClient) -> None:
         self._client = client
 
     def __call__(self, name: str) -> Workspace | None:
@@ -215,7 +219,7 @@ class FakeWorkspacesManager:
 
 
 class FakeUsersManager:
-    def __init__(self, client: "FakeClient") -> None:
+    def __init__(self, client: FakeClient) -> None:
         self._client = client
 
     def __call__(self, username: str) -> User | None:
@@ -229,7 +233,7 @@ class FakeUsersManager:
 
 
 class FakeDatasetsManager:
-    def __init__(self, client: "FakeClient") -> None:
+    def __init__(self, client: FakeClient) -> None:
         self._client = client
 
     def __call__(self, name: str | None = None, workspace: Any | None = None, id: Any | None = None) -> Dataset | None:
@@ -255,14 +259,14 @@ class FakeClient:
     ``Field.from_model`` fall back to the last-built client.
     """
 
-    _default_client: "FakeClient | None" = None
+    _default_client: FakeClient | None = None
 
     @classmethod
-    def _set_default(cls, client: "FakeClient") -> None:
+    def _set_default(cls, client: FakeClient) -> None:
         cls._default_client = client
 
     @classmethod
-    def _get_default(cls) -> "FakeClient":
+    def _get_default(cls) -> FakeClient:
         if cls._default_client is None:
             raise RuntimeError("No default client set; build one first.")
         return cls._default_client
