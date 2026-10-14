@@ -80,7 +80,10 @@ def datasets_list(ctx: click.Context, workspace_name: str | None, account: str |
     """List datasets, newest first."""
     client = get_client(ctx)
     names = _workspace_names(client)
-    models = client.api.datasets.list(workspace_name=workspace_name)
+    workspace_id = None
+    if workspace_name is not None:
+        workspace_id = find_workspace(client, workspace_name).id
+    models = client.api.datasets.list(workspace_id=workspace_id)
     rows = []
     for model in models:
         rows.append(

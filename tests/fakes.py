@@ -69,12 +69,10 @@ class FakeDatasetsAPI(_FakeResourceAPI):
         stored.allow_extra_metadata = model.allow_extra_metadata
         return stored
 
-    def list(self, **kwargs: Any) -> list[Any]:
-        workspace_name = kwargs.get("workspace_name")
-        if not workspace_name:
+    def list(self, workspace_id: Any = None) -> list[Any]:
+        if not workspace_id:
             return list(self.models)
-        ws = next(w for w in self.workspaces.models if w.name == workspace_name)
-        return [model for model in self.models if model.workspace_id == ws.id]
+        return [model for model in self.models if model.workspace_id == workspace_id]
 
     def exists(self, dataset_id: UUID) -> bool:
         return self.get(dataset_id) is not None

@@ -15,6 +15,7 @@ from tests.helpers import invoke
 CREDENTIALS_FILE = Path(
     os.environ.get("ARGILLA_CLI_CREDENTIALS_FILE", "~/offline/secrets/legalbenchmarks_studio_token.env")
 )
+STUDIO_URL = os.environ.get("ARGILLA_CLI_STUDIO_URL", "https://studio.legalbenchmarks.ai")
 
 pytestmark = [
     pytest.mark.studio,
@@ -36,14 +37,17 @@ def secret_values() -> dict[str, str]:
 
 class TestStudioSmoke:
     def test_whoami_reads_the_studio(self, secret_values):
-        result = invoke(None, ["--json", "--credentials-file", str(CREDENTIALS_FILE), "whoami"])
+        result = invoke(None, ["--json", "--url", STUDIO_URL, "--credentials-file", str(CREDENTIALS_FILE), "whoami"])
         assert result.exit_code == 0, result.output
         whoami = json.loads(result.stdout)
         assert whoami["username"]
         self._assert_no_secrets(result.output, secret_values)
 
     def test_datasets_list_reads_the_studio(self, secret_values):
-        result = invoke(None, ["--json", "--credentials-file", str(CREDENTIALS_FILE), "datasets", "list"])
+        result = invoke(
+            None,
+            ["--json", "--url", STUDIO_URL, "--credentials-file", str(CREDENTIALS_FILE), "datasets", "list"],
+        )
         assert result.exit_code == 0, result.output
         json.loads(result.stdout)  # a JSON array comes back
         self._assert_no_secrets(result.output, secret_values)
