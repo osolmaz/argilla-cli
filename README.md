@@ -1,7 +1,12 @@
 # argilla-cli
 
+<p align="center">
+  <img src="assets/cover.svg" alt="argilla-cli: a command-line client for Argilla 2.x servers, for people and agents" width="880">
+</p>
+
 argilla-cli is a command-line client for Argilla 2.x servers, for people and agents.
-It logs in, manages workspaces, users, datasets, records, responses, and suggestions, and moves review data in and out of a server as JSON and JSONL — with one JSON switch on every command, so the same command feeds a human a short table and an agent a parseable document.
+It logs in, manages workspaces, users, datasets, records, responses, and suggestions, and moves review data in and out of a server as JSON and JSONL.
+Every command takes `--json`, so the same command prints a short table for people and JSON for agents.
 
 ## Quick look
 
