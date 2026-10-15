@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from argilla import Workspace
 
 from argilla_cli.commands.helpers import (
+    confirm_destructive,
     find_user,
     find_workspace,
     get_client,
@@ -20,7 +21,7 @@ from argilla_cli.commands.helpers import (
 )
 from argilla_cli.errors import ArgillaCLIError
 from argilla_cli.output import emit
-from argilla_cli.profiles import confirm_destructive, enforce_profile
+from argilla_cli.profiles import enforce_profile
 
 
 def _workspace_row(workspace: Workspace) -> dict[str, Any]:
@@ -69,13 +70,13 @@ def workspaces_create(ctx: click.Context, name: str, dry_run: bool, account: str
 
 @workspaces.command("delete")
 @click.argument("name")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
 @with_account
 @click.pass_context
 def workspaces_delete(ctx: click.Context, name: str, yes: bool, account: str | None) -> None:
     """Delete the workspace named NAME."""
     enforce_profile("workspaces delete", profile_in_force(ctx))
-    confirm_destructive("workspaces delete", yes=yes, details=name)
+    confirm_destructive(ctx, "workspaces delete", yes=yes, details=name)
     client = get_client(ctx)
     workspace = find_workspace(client, name)
     sdk_call(lambda: workspace.delete(), "Deleting workspace")
@@ -100,7 +101,7 @@ def workspaces_add_user(ctx: click.Context, workspace_name: str, username: str, 
 @workspaces.command("remove-user")
 @click.argument("workspace_name")
 @click.argument("username")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
 @with_account
 @click.pass_context
 def workspaces_remove_user(
@@ -108,7 +109,7 @@ def workspaces_remove_user(
 ) -> None:
     """Remove the user USERNAME from the workspace WORKSPACE_NAME."""
     enforce_profile("workspaces remove-user", profile_in_force(ctx))
-    confirm_destructive("workspaces remove-user", yes=yes, details=f"{username} from {workspace_name}")
+    confirm_destructive(ctx, "workspaces remove-user", yes=yes, details=f"{username} from {workspace_name}")
     client = get_client(ctx)
     workspace = find_workspace(client, workspace_name)
     find_user(client, username)

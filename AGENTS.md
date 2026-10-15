@@ -14,7 +14,7 @@ uv run mypy                      # strict typecheck of src/
 uv run pytest --cov --cov-fail-under=85   # tests with the coverage gate
 uvx pip-audit --strict           # dependency audit
 uvx slophammer-py dry .          # duplication check
-uv run python scripts/check-mutation.py --min-kill-rate 70   # mutation gate
+uv run python scripts/check-mutation.py --min-kill-rate 65   # mutation gate
 uvx slophammer-py check .        # Slophammer conformance
 ```
 

@@ -78,9 +78,31 @@ class TestResponsesSubmit:
         )
         assert result.exit_code == 0, result.output
 
-    def test_submit_as_other_user(self, fake_ctx, dataset):
+    def test_submit_files_under_the_caller(self, fake_ctx, dataset):
         seeded_dataset(fake_ctx, dataset)
         fake_ctx.add_user("amelie")
+        record = fake_ctx.add_record(dataset.id, "r1", fields={"prompt": "one"})
+        result = invoke(
+            fake_ctx,
+            [
+                "--json",
+                "responses",
+                "submit",
+                "contracts",
+                str(record.id),
+                "--answers",
+                '{"quality": "ok"}',
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        stored = fake_ctx.api.records.get(record.id)
+        # The model carries no user_id: the 2.8 server pins the response to
+        # the authenticated user and would ignore an override.
+        stored_response = stored.responses[0]
+        assert stored_response.values == {"quality": {"value": "ok"}}
+
+    def test_submit_rejects_user_flag(self, fake_ctx, dataset, isolated_config):
+        """The 2.8 server pins responses to the caller; --user cannot exist."""
         record = fake_ctx.add_record(dataset.id, "r1", fields={"prompt": "one"})
         result = invoke(
             fake_ctx,
@@ -96,9 +118,8 @@ class TestResponsesSubmit:
                 "amelie",
             ],
         )
-        assert result.exit_code == 0, result.output
-        stored = fake_ctx.api.records.get(record.id)
-        assert stored.responses[0].user_id is not None
+        assert result.exit_code != 0
+        assert "no such option" in result.output.lower()
 
     def test_read_only_profile_refuses(self, fake_ctx, dataset, isolated_config):
         set_profile(isolated_config, "read-only")

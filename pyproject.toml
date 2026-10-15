@@ -16,6 +16,10 @@ dependencies = [
     "argilla==2.8.0",
     # `datasets get --settings --format yaml` needs a YAML dumper.
     "pyyaml>=6.0",
+    # The CLI calls servers with httpx directly (token, /me, version).
+    "httpx>=0.27",
+    # The argilla SDK imports requests (settings templates) without
+    # declaring it; the CLI carries it so the SDK works from a clean env.
     "requests>=2.34.2",
 ]
 

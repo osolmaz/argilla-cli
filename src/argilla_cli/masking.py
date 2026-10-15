@@ -57,10 +57,10 @@ def redact(text: str) -> str:
 
 # A URL query or fragment never carries Argilla credentials, but tokens and
 # keys could end up in a pasted URL; scrub whole query strings too.
-_URL_QUERY = re.compile(r"\?[^\s]*")
+_URL_QUERY = re.compile(r"(https?://\S*\?)\S*")
 
 
 def redact_message(text: str) -> str:
     """Redact registered secrets and any URL query string from a message."""
     text = redact(text)
-    return _URL_QUERY.sub("?<redacted>", text)
+    return _URL_QUERY.sub(r"\1<redacted>", text)

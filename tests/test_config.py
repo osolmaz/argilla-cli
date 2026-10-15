@@ -85,7 +85,9 @@ def test_remove_account_and_active_reassignment(isolated_config):
     removed = config_mod.remove_account("b")
     assert removed["username"] == "u2"
     cfg = config_mod.load_config()
-    assert config_mod.active_account_name(cfg) == "a"
+    # No silent switch: the next account by name could be a full-profile
+    # production account, so removing the active one leaves nothing active.
+    assert config_mod.active_account_name(cfg) is None
     with pytest.raises(ConfigError):
         config_mod.remove_account("b")
 

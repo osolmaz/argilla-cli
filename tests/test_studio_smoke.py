@@ -12,14 +12,19 @@ from pathlib import Path
 import pytest
 from tests.helpers import invoke
 
-CREDENTIALS_FILE = Path(
-    os.environ.get("ARGILLA_CLI_CREDENTIALS_FILE", "~/offline/secrets/legalbenchmarks_studio_token.env")
-)
+
+def credentials_file() -> Path:
+    return Path(
+        os.environ.get("ARGILLA_CLI_CREDENTIALS_FILE", "~/offline/secrets/legalbenchmarks_studio_token.env")
+    ).expanduser()
+
+
 STUDIO_URL = os.environ.get("ARGILLA_CLI_STUDIO_URL", "https://studio.legalbenchmarks.ai")
 
 pytestmark = [
     pytest.mark.studio,
     pytest.mark.skipif(os.environ.get("ARGILLA_CLI_STUDIO") != "1", reason="needs ARGILLA_CLI_STUDIO=1"),
+    pytest.mark.skipif(not credentials_file().exists(), reason="the studio credentials file is missing"),
 ]
 
 
@@ -27,8 +32,9 @@ pytestmark = [
 def secret_values() -> dict[str, str]:
     """Read the file ONCE so the test can assert values stay hidden."""
     values: dict[str, str] = {}
-    if CREDENTIALS_FILE.exists():
-        for line in CREDENTIALS_FILE.read_text().splitlines():
+    creds_file = credentials_file()
+    if creds_file.exists():
+        for line in creds_file.read_text().splitlines():
             key, _, value = line.partition("=")
             if key.strip() and value.strip():
                 values[key.strip()] = value.strip().strip("\"'")
@@ -37,7 +43,7 @@ def secret_values() -> dict[str, str]:
 
 class TestStudioSmoke:
     def test_whoami_reads_the_studio(self, secret_values):
-        result = invoke(None, ["--json", "--url", STUDIO_URL, "--credentials-file", str(CREDENTIALS_FILE), "whoami"])
+        result = invoke(None, ["--json", "--url", STUDIO_URL, "--credentials-file", str(credentials_file()), "whoami"])
         assert result.exit_code == 0, result.output
         whoami = json.loads(result.stdout)
         assert whoami["username"]
@@ -46,7 +52,7 @@ class TestStudioSmoke:
     def test_datasets_list_reads_the_studio(self, secret_values):
         result = invoke(
             None,
-            ["--json", "--url", STUDIO_URL, "--credentials-file", str(CREDENTIALS_FILE), "datasets", "list"],
+            ["--json", "--url", STUDIO_URL, "--credentials-file", str(credentials_file()), "datasets", "list"],
         )
         assert result.exit_code == 0, result.output
         json.loads(result.stdout)  # a JSON array comes back

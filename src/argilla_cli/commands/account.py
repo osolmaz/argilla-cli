@@ -77,7 +77,9 @@ def _entry_for_save(creds: auth.Credentials, profile: str | None, server_usernam
     default=None,
     help="Account password. A hidden prompt asks when this is missing and there is a terminal.",
 )
+@click.option("--password-stdin", "password_stdin", is_flag=True, default=False, help="Read the password from stdin.")
 @click.option("--api-key", "api_key", default=None, help="API key, for accounts that use one instead of a password.")
+@click.option("--api-key-stdin", "api_key_stdin", is_flag=True, default=False, help="Read the API key from stdin.")
 @click.option(
     "--credentials-file",
     "credentials_file",
@@ -98,7 +100,9 @@ def login_cmd(
     url: str | None,
     username: str | None,
     password: str | None,
+    password_stdin: bool,
     api_key: str | None,
+    api_key_stdin: bool,
     credentials_file: str | None,
     account: str | None,
     profile: str | None,
@@ -117,17 +121,31 @@ def login_cmd(
         "api_key": api_key,
         "credentials_file": credentials_file,
     }
-    creds = auth.resolve_credentials(ctx, flags=flags)
+    if password_stdin and api_key_stdin:
+        raise CredentialsError("Pass either --password-stdin or --api-key-stdin, not both.")
+    if password_stdin:
+        if password:
+            raise CredentialsError("Pass either --password or --password-stdin, not both.")
+        flags["password"] = sys.stdin.readline().rstrip("\n")
+    if api_key_stdin:
+        if api_key:
+            raise CredentialsError("Pass either --api-key or --api-key-stdin, not both.")
+        flags["api_key"] = sys.stdin.readline().rstrip("\n")
+    creds = auth.resolve_credentials(ctx, flags=flags, account_reference=False)
 
     if not creds.url:
         raise CredentialsError("No server URL. Pass --url or set ARGILLA_API_URL.")
+    config_mod.validate_server_url(creds.url)
     _ensure_secret(creds)
 
     user = _authenticate(creds)
     if creds.username and user.get("username") and user["username"] != creds.username:
         raise CredentialsError(f"The server returned user {user['username']!r}, not {creds.username!r}.")
 
-    name = account or creds.account or default_account_name(creds.url, creds.username)
+    # A login without an explicit --account saves under its own name, not
+    # the active account's: otherwise it silently overwrites another
+    # server's entry.
+    name = account or default_account_name(creds.url, creds.username or user.get("username"))
     config_mod.save_account(name, _entry_for_save(creds, profile, user.get("username")))
 
     emit(
@@ -163,11 +181,17 @@ def account_group() -> None:
 @account_group.command("list")
 @click.pass_context
 def account_list(ctx: click.Context) -> None:
-    """List saved accounts."""
+    """List saved accounts, * marking the active one."""
     cfg = config_mod.load_config()
     active = config_mod.active_account_name(cfg)
     accounts = [_account_summary(name, entry, active) for name, entry in sorted(config_mod.get_accounts(cfg).items())]
-    emit(ctx, accounts)
+    table = [{**row, "active": "*" if row["active"] else ""} for row in accounts]
+    emit(
+        ctx,
+        accounts,
+        table=table,
+        columns=[("active", ""), ("name", "name"), ("url", "url"), ("username", "username"), ("profile", "profile")],
+    )
 
 
 @account_group.command("use")

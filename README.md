@@ -96,4 +96,4 @@ Accounts live in `~/.argilla-cli/config.json` (directory 0700, file 0600). `conf
 - Secrets are never printed: not by `config show`, not in errors, not in tables.
 - Destructive commands (`delete`, `remove-user`) ask for confirmation; without a terminal they need `--yes`.
 - `create`, `add`, and `import` take `--dry-run`.
-- Each account carries a permission profile: `full` (the default) or `read-only`, which refuses every write. Override one invocation with `--profile`.
+- Each account carries a permission profile: `full` (the default) or `read-only`, which refuses every write. `--profile read-only` tightens one invocation; it never loosens a read-only account.

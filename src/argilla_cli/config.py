@@ -7,6 +7,7 @@ config, and only when the user saved it there (a credentials file referenced by
 an account keeps the secret outside the config entirely).
 """
 
+import contextlib
 import json
 import os
 import sys
@@ -48,10 +49,18 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
 
 
 def save_config(data: dict[str, Any], path: Path | None = None) -> None:
-    """Write the whole config, creating the file 0600 and the directory 0700."""
+    """Write the whole config, creating the file 0600 and the directory 0700.
+
+    The write is atomic: a temp file in the same directory receives the
+    content and then replaces the config, so a crash or a second writer can
+    never leave a half-written JSON file behind.
+    """
     path = path if path is not None else config_path()
+    parent_existed = path.parent.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
-    if os.name != "nt":
+    if os.name != "nt" and not parent_existed:
+        # Tighten the mode only on a directory this call created; chmod on an
+        # existing directory (say $HOME) is not ours to change.
         try:
             path.parent.chmod(0o700)
         except OSError as exc:
@@ -63,28 +72,17 @@ def save_config(data: dict[str, Any], path: Path | None = None) -> None:
         path.write_text(content, encoding="utf-8")
         return
 
-    # O_CREAT's mode argument is ignored when the file already exists, so an
-    # inherited 0644 config would survive the write. fchmod() after the
-    # O_TRUNC is what actually tightens it -- and it runs while the file is
-    # still empty, so the secret is never on disk at the looser mode.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
+        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temp_path, path)
     except OSError as exc:
-        # Worth continuing: a secret in a loose-moded file still beats no
-        # saved login at all, as long as the weakened guarantee is not silent.
-        _warn(f"could not set permissions on {path}: {exc}")
-
-    try:
-        handle = os.fdopen(fd, "w", encoding="utf-8")
-    except BaseException:
-        # The only window where nothing else owns the descriptor. Once
-        # fdopen() returns, the file object owns it and closing here too
-        # would be a double close.
-        os.close(fd)
-        raise
-    with handle:
-        handle.write(content)
+        with contextlib.suppress(OSError):
+            os.unlink(temp_path)
+        raise ConfigError(f"could not write config at {path}: {exc}") from exc
 
 
 def get_accounts(config: dict[str, Any]) -> dict[str, Any]:
@@ -112,8 +110,8 @@ def validate_account_name(name: str) -> str:
 def validate_account_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Check one account entry, returning only the known keys that are set."""
     url = entry.get("url")
-    if url is not None and not (isinstance(url, str) and url.startswith(("http://", "https://"))):
-        raise ConfigError(f"Account url must start with http:// or https://, got {url!r}.")
+    if url is not None:
+        validate_server_url(str(url))
     profile = entry.get("profile") or "full"
     if profile not in VALID_PROFILES:
         raise ConfigError(f"Account profile must be one of {', '.join(VALID_PROFILES)}, got {profile!r}.")
@@ -122,13 +120,34 @@ def validate_account_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def validate_server_url(url: str) -> str:
+    """A server URL is a bare origin: no credentials, query, or fragment."""
+    from urllib.parse import urlparse
+
+    if not url.startswith(("http://", "https://")):
+        raise ConfigError(f"Server URL must start with http:// or https://, got {url!r}.")
+    parsed = urlparse(url)
+    if parsed.username or parsed.password:
+        raise ConfigError("A server URL must not carry a username or password; pass them with --username/--password.")
+    if parsed.query or parsed.fragment:
+        raise ConfigError(f"A server URL must not carry a query string or fragment, got {url!r}.")
+    return url
+
+
 def save_account(name: str, entry: dict[str, Any], path: Path | None = None) -> None:
-    """Create or update one account entry and make it the active account."""
+    """Create or update one account entry and make it the active account.
+
+    Secret fields (api_key, password, credentials_file) are replaced, not
+    merged: a new login that carries no secret must not keep the previous
+    login's secret alive under the same name.
+    """
     name = validate_account_name(name)
     entry = validate_account_entry(entry)
     config = load_config(path)
     accounts = get_accounts(config)
     existing = accounts.get(name) or {}
+    for key in ("api_key", "password", "credentials_file"):
+        existing.pop(key, None)
     existing.update(entry)
     accounts[name] = existing
     config["accounts"] = accounts
@@ -155,7 +174,8 @@ def remove_account(name: str, path: Path | None = None) -> dict[str, Any]:
     removed: dict[str, Any] = accounts.pop(name)
     config["accounts"] = accounts
     if active_account_name(config) == name:
-        remaining = sorted(accounts)
-        config["active_account"] = remaining[0] if remaining else None
+        # Never pick a new active account behind the user's back: the next
+        # one by name could be a full-profile production account.
+        config["active_account"] = None
     save_config(config, path)
     return removed

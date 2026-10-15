@@ -108,6 +108,10 @@ class FakeRecordsAPI:
         **_kwargs: Any,
     ) -> list[Any]:
         scoped = [model for model in self.models if self.dataset_ids.get(model.id) == dataset_id]
+        # The server always answers with arrays for these, never null.
+        for model in scoped:
+            model.suggestions = model.suggestions or []
+            model.responses = model.responses or []
         return scoped[offset : offset + limit]
 
     def get(self, record_id: UUID) -> Any:
@@ -115,6 +119,15 @@ class FakeRecordsAPI:
             if model.id == record_id:
                 return model
         return None
+
+    def get_json(self, record_id: UUID) -> dict[str, Any]:
+        """The record as the server serializes it, with the dataset id on it."""
+        model = self.get(record_id)
+        if model is None:
+            raise KeyError(str(record_id))
+        body = model.model_dump(mode="json")
+        body["dataset_id"] = str(self.dataset_ids.get(model.id))
+        return body
 
     def update(self, model: Any) -> Any:
         stored = self.get(model.id)
@@ -176,10 +189,10 @@ class FakeDatasetRelatedAPI(_FakeResourceAPI):
         return [model for model in self.models if model.dataset_id == dataset_id]
 
     def update(self, model: Any) -> Any:
+        # Strict, like the server: an unknown id is an error, never a create.
         stored = next((m for m in self.models if m.id == model.id), None)
         if stored is None:
-            self.models.append(model)
-            return model
+            raise KeyError(str(model.id))
         stored.settings = model.settings
         stored.title = model.title
         stored.required = model.required
@@ -334,6 +347,7 @@ class FakeClient:
     def add_field(self, dataset_id: UUID, name: str, title: str | None = None, required: bool = True) -> None:
         self.api.fields.models.append(
             FieldModel(
+                id=uuid4(),
                 name=name,
                 title=title or name.title(),
                 required=required,

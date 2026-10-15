@@ -12,6 +12,15 @@ from typing import Any
 import click
 
 
+def wants_json(ctx: click.Context | None) -> bool:
+    """Whether this invocation prints JSON: the group flag or the command's own."""
+    if ctx is None:
+        return False
+    if bool(ctx.obj.get("use_json", False)) if ctx.obj else False:
+        return True
+    return bool(ctx.params.get("json_flag"))
+
+
 def emit(
     ctx: click.Context | None,
     data: Any,  # noqa: ANN401 -- every command result shape crosses this one boundary
@@ -24,7 +33,7 @@ def emit(
     table:  optional simpler rows for table mode (list of dicts of scalars).
     columns: (key, header) pairs for table mode; defaults to the data's keys.
     """
-    use_json = bool(ctx.obj.get("use_json", False)) if ctx else False
+    use_json = wants_json(ctx)
     if use_json:
         click.echo(json.dumps(data, indent=2, ensure_ascii=False, default=str))
         return

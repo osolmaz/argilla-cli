@@ -135,8 +135,8 @@ def _resolve_field(
 ) -> tuple[str | None, bool]:
     """Resolve one credential field: direct sources, env, then the account.
 
-    Returns the value and whether it came from a direct source this run (and
-    may therefore be saved into the config).
+    Returns the value and whether the user themselves provided it this run
+    (flag or environment, and so it may be saved into the config).
     """
     value: str | None = None
     for source in sources:
@@ -149,6 +149,10 @@ def _resolve_field(
         value = explicit_values[key]
     if value is None and env_name:
         value = os.environ.get(env_name)
+        if value:
+            # An environment secret is as much the user's own choice as a
+            # flag: `ARGILLA_API_KEY=... login` must be able to save it.
+            explicit = True
     if value is None and entry is not None:
         value = file_values.get(key) or entry.get(key) or None
         if isinstance(value, str) is False and value is not None:
@@ -156,26 +160,80 @@ def _resolve_field(
     return value, explicit
 
 
+def _source_level(
+    key: str, sources: list[dict[str, Any]], explicit_values: dict[str, str], env_name: str | None
+) -> str:
+    """Where a field came from: 'direct' (flag, env, or credentials file) or 'account'."""
+    for source in sources:
+        if source.get(key):
+            return "direct"
+    if explicit_values.get(key) or (env_name and os.environ.get(env_name)):
+        return "direct"
+    return "account"
+
+
+def _refuse_mismatched_secret_url(
+    url: str,
+    entry: dict[str, Any] | None,
+    account_name: str | None,
+    direct_sources: list[dict[str, Any]],
+    explicit_values: dict[str, str],
+    api_key: str | None,
+    password: str | None,
+) -> None:
+    """Refuse an account secret when the URL names a different server.
+
+    Credentials resolve as a set, not per field: a URL from a flag or the
+    environment must never borrow a secret stored for another server.
+    """
+    url_level = _source_level("url", direct_sources, explicit_values, ENV_URL)
+    if url_level != "direct" or entry is None:
+        return
+    entry_url = entry.get("url")
+    for secret_key, env_name, secret_value in (
+        ("api_key", ENV_API_KEY, api_key),
+        ("password", ENV_PASSWORD, password),
+    ):
+        if secret_value is None:
+            continue
+        if _source_level(secret_key, direct_sources, explicit_values, env_name) != "account":
+            continue
+        if entry_url and str(entry_url) != url:
+            raise CredentialsError(
+                f"The URL {url} does not match the URL of the account in use"
+                f"{f' ({account_name})' if account_name else ''}, so its stored secret must not be sent"
+                " there. Pass --api-key or --username and --password for this server, or drop --url."
+            )
+
+
 def resolve_credentials(
     ctx: click.Context | None = None,
     flags: dict[str, Any] | None = None,
     config_path: Path | None = None,
+    account_reference: bool = True,
 ) -> Credentials:
     """Resolve credentials: flags, then env, then the named or active account.
 
     ctx:    the click context; its local params (for instance --account on a
             subcommand) come first, then the group-level options in ctx.obj.
     flags:  explicit overrides, used by login for its own options.
+    account_reference: when False, an --account parameter names a SAVE target
+            (as on `login`), not an account to resolve credentials from.
     """
     from argilla_cli import config as config_mod
 
     obj: dict[str, Any] = (ctx.obj or {}) if ctx is not None else {}
     params: dict[str, Any] = dict(ctx.params) if ctx is not None else {}
+    if not account_reference:
+        params.pop("account", None)
     direct_sources = [flags or {}, params, obj]
 
     cfg = config_mod.load_config(config_path)
-    account_name = _direct_value("account", direct_sources) or config_mod.active_account_name(cfg)
+    named_account = _direct_value("account", direct_sources)
+    account_name = named_account or config_mod.active_account_name(cfg)
     entry = config_mod.get_account(cfg, account_name) if account_name else None
+    if named_account and entry is None:
+        raise CredentialsError(f"No account named {named_account!r}. Run `argilla-cli account list` to see accounts.")
 
     # A credentials file passed as a flag counts as a flag-level source.
     explicit_file = _direct_value("credentials_file", direct_sources)
@@ -198,6 +256,9 @@ def resolve_credentials(
         "api_key", ENV_API_KEY, direct_sources, explicit_values, entry, file_values
     )
 
+    # Credentials resolve as a set, not per field: see the helper.
+    _refuse_mismatched_secret_url(url or "", entry, account_name, direct_sources, explicit_values, api_key, password)
+
     creds = Credentials(
         url=url,
         username=username,
@@ -208,7 +269,11 @@ def resolve_credentials(
         password_explicit=password_explicit,
         api_key_explicit=api_key_explicit,
     )
-    creds.profile = obj.get("profile") or (entry or {}).get("profile") or "full"
+    # --profile can only tighten: a read-only account stays read-only even
+    # when the invocation asks for full.
+    entry_profile = (entry or {}).get("profile") or "full"
+    override = obj.get("profile")
+    creds.profile = "read-only" if (entry_profile == "read-only" or override == "read-only") else "full"
 
     masking.register_secrets(creds.secrets())
     return creds
@@ -223,8 +288,26 @@ def _direct_value(key: str, sources: list[dict[str, Any]]) -> str | None:
 
 
 def http_client() -> httpx.Client:
-    """A fresh client for the few raw calls the CLI makes itself."""
-    return httpx.Client(timeout=DEFAULT_TIMEOUT, follow_redirects=True)
+    """A fresh client for the few raw calls the CLI makes itself.
+
+    Redirects are refused: httpx strips only the Authorization header on a
+    cross-origin redirect, so following one could forward the API key or the
+    password form to whatever host the Location names.
+    """
+    return httpx.Client(timeout=DEFAULT_TIMEOUT, follow_redirects=False)
+
+
+def _refuse_redirect(response: httpx.Response, url: str) -> None:
+    """Raise instead of following a redirect: it may be fishing for credentials."""
+    if not (300 <= response.status_code < 400):
+        return
+    location = response.headers.get("location", "")
+    # A query string can smuggle secrets back into a message: drop it.
+    safe_location = masking.redact_message(location.split("?", 1)[0])
+    raise CredentialsError(
+        f"The server at {url} answered with a redirect to {safe_location or 'another location'}"
+        " instead of the Argilla API. Check the URL and try the redirect target directly."
+    )
 
 
 def _api(url: str, path: str) -> str:
@@ -252,10 +335,14 @@ def request_token(url: str, username: str, password: str, client: httpx.Client |
             client.close()
     if response.status_code == 401:
         raise CredentialsError(f"Invalid username or password for {url}.")
+    _refuse_redirect(response, url)
     if response.status_code not in (200, 201):
         # The body may carry the access token: never quote it back.
         raise CredentialsError(f"Login failed: HTTP {response.status_code} from {url}.")
-    payload: Any = response.json()
+    try:
+        payload: Any = response.json()
+    except ValueError as exc:
+        raise CredentialsError(f"The server at {url} did not answer with an Argilla API response.") from exc
     token = payload.get("access_token")
     if not token:
         raise CredentialsError("Login response carried no access_token.")
@@ -289,9 +376,13 @@ def request_me(
             client.close()
     if response.status_code == 401:
         raise CredentialsError(f"The server at {url} rejected these credentials (HTTP 401).")
+    _refuse_redirect(response, url)
     if response.status_code != 200:
         raise CredentialsError(f"Could not read the current user: HTTP {response.status_code} from {url}.")
-    user: Any = response.json()
+    try:
+        user: Any = response.json()
+    except ValueError as exc:
+        raise CredentialsError(f"The server at {url} did not answer with an Argilla API response.") from exc
     return user if isinstance(user, dict) else {}
 
 

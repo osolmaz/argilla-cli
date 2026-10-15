@@ -5,9 +5,10 @@ client once, find resources with clean errors, and map SDK failures to one
 redacted CLI message.
 """
 
+import functools
 import warnings
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import click
 from click.decorators import FC
@@ -74,25 +75,82 @@ def find_user(client: ArgillaClient, username: str) -> Resource:
 
 
 def find_dataset(client: ArgillaClient, name: str, workspace: Resource | None = None) -> Resource:
+    """Find a dataset by name, never guessing between same-named copies."""
     if workspace is not None:
         dataset = quiet_call(lambda: client.datasets(name, workspace=workspace))
         if dataset is None:
             raise NotFoundError(f"No dataset named {name!r} in workspace {workspace.name!r}.")
         return dataset
-    dataset = quiet_call(lambda: client.datasets(name))
-    if dataset is not None:
-        return dataset
-    # The default workspace may not hold the dataset: scan the server.
+    # Scan every workspace: the SDK's by-name lookup only searches the first
+    # one, so a same-named dataset elsewhere would stay invisible or win by
+    # accident.
     matches = [model for model in client.api.datasets.list() if model.name == name]
     if len(matches) > 1:
+        workspace_names = _workspace_names(client)
+        found = sorted(workspace_names.get(str(model.workspace_id), "?") for model in matches)
         raise NotFoundError(
-            f"Several datasets named {name!r} exist in different workspaces. Pass --workspace to pick one."
+            f"Several datasets named {name!r} exist (workspaces: {', '.join(found)}). Pass --workspace to pick one."
         )
     if matches:
-        found = quiet_call(lambda: client.datasets(id=matches[0].id))
-        if found is not None:
-            return found
+        found_dataset = quiet_call(lambda: client.datasets(id=matches[0].id))
+        if found_dataset is not None:
+            return found_dataset
     raise NotFoundError(f"No dataset named {name!r} on this server.")
+
+
+def _workspace_names(client: ArgillaClient) -> dict[str, str]:
+    return {str(ws.id): ws.name for ws in client.workspaces}
+
+
+def with_workspace(command: FC) -> FC:
+    """Attach the --workspace scoping flag for commands that take a dataset."""
+    return click.option(
+        "--workspace",
+        "workspace_name",
+        default=None,
+        help="The dataset's workspace, when the name is ambiguous.",
+    )(command)
+
+
+def dataset_from_args(ctx: click.Context, client: ArgillaClient, name: str, workspace_name: str | None) -> Resource:
+    """Resolve a dataset argument, honoring an explicit --workspace scope."""
+    workspace = find_workspace(client, workspace_name) if workspace_name else None
+    return find_dataset(client, name, workspace)
+
+
+def confirm_destructive(ctx: click.Context, command_path: str, yes: bool, details: str = "") -> None:
+    """Confirmation with both --yes switches: the group flag and the local one."""
+    from argilla_cli.profiles import confirm_destructive as confirm
+
+    global_yes = bool(ctx.obj and ctx.obj.get("yes"))
+    confirm(command_path, yes=yes or global_yes, details=details)
+
+
+def _raw_record_json(client: ArgillaClient, record_id: Any) -> dict[str, Any]:  # noqa: ANN401 -- a server record body
+    """The record as the server serialized it, before the SDK model drops fields."""
+    api_records = client.api.records
+    raw_get = getattr(api_records, "get_json", None)
+    if raw_get is not None:
+        # Test fakes expose the raw body directly; the real API client only
+        # has the HTTP layer.
+        body: Any = raw_get(record_id)
+        return body if isinstance(body, dict) else {}
+    response = api_records.http_client.get(f"/api/v1/records/{record_id}")
+    response.raise_for_status()
+    body_any: Any = response.json()
+    return body_any if isinstance(body_any, dict) else {}
+
+
+def enforce_record_in_dataset(client: ArgillaClient, dataset: Resource, record_id: object, dataset_name: str) -> None:
+    """Refuse to act on a record id that lives in a different dataset.
+
+    The SDK's record model carries no dataset id, so a UUID from another
+    dataset would be fetched, updated, or deleted without complaint.
+    """
+    body = _raw_record_json(client, record_id)
+    owner = body.get("dataset_id")
+    if owner is not None and str(owner) != str(dataset.id):
+        raise ArgillaCLIError(f"Record {record_id} is not in dataset {dataset_name!r}; it belongs to another dataset.")
 
 
 def default_workspace(client: ArgillaClient) -> Resource:
@@ -111,5 +169,20 @@ def sdk_call(action: Callable[[], T], what: str) -> T:
 
 
 def with_account(command: FC) -> FC:
-    """Attach the per-command --account flag, as the plan asks for every command."""
-    return click.option("--account", "account", default=None, help="Use this named account.")(command)
+    """Attach the per-command --account and --json flags.
+
+    The group-level --json only parses before the subcommand, which agents
+    get wrong; a per-command --json reads naturally in either position. The
+    wrapper drops the flag from the callback call; emit() reads it from
+    ctx.params, so no command signature has to grow a parameter.
+    """
+    decorated = click.option("--json", "json_flag", is_flag=True, default=False, help="Output as JSON.")(
+        click.option("--account", "account", default=None, help="Use this named account.")(command)
+    )
+
+    @functools.wraps(decorated)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 -- a pass-through boundary
+        kwargs.pop("json_flag", None)
+        return decorated(*args, **kwargs)
+
+    return cast("FC", wrapper)

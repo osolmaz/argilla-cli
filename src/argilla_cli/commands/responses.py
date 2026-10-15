@@ -14,12 +14,13 @@ import click
 
 from argilla_cli.commands.helpers import (
     ArgillaClient,
-    find_dataset,
-    find_user,
+    dataset_from_args,
+    enforce_record_in_dataset,
     get_client,
     profile_in_force,
     sdk_call,
     with_account,
+    with_workspace,
 )
 from argilla_cli.errors import ArgillaCLIError
 from argilla_cli.output import emit
@@ -79,16 +80,16 @@ def _iter_response_rows(
 
 
 def _resolve_record_id(dataset: Dataset, record_ref: str) -> Any:  # noqa: ANN401 -- a server UUID crosses here
-    """Accept a server record id (UUID) or an external id."""
-    from uuid import UUID, uuid4
+    """Accept a server record id (UUID) or an external id.
 
-    try:
-        return UUID(record_ref)
-    except ValueError:
-        pass
+    A bare UUID string is ambiguous: the SDK gives records without an
+    explicit id a random-UUID external id, so our own exports carry
+    UUID-shaped external ids. The external id wins over the server id.
+    """
     for record in dataset.records(with_suggestions=False, with_responses=False):
-        if record._model.external_id == record_ref:
-            return record._model.id or uuid4()
+        model = record._model
+        if model.external_id == record_ref or str(model.id) == record_ref:
+            return model.id
     raise ArgillaCLIError(f"No record {record_ref!r} in dataset {dataset.name!r}.")
 
 
@@ -101,6 +102,7 @@ def responses() -> None:
 @click.argument("dataset_name")
 @click.option("--user", "user_name", default=None, help="Only responses by this username.")
 @click.option("--status", type=click.Choice(STATUS_CHOICES), default=None, help="Only this status.")
+@with_workspace
 @with_account
 @click.pass_context
 def responses_list(
@@ -108,20 +110,22 @@ def responses_list(
     dataset_name: str,
     user_name: str | None,
     status: str | None,
+    workspace_name: str | None,
     account: str | None,
 ) -> None:
     """List the responses on the dataset DATASET_NAME."""
     client = get_client(ctx)
-    dataset = find_dataset(client, dataset_name)
+    dataset = dataset_from_args(ctx, client, dataset_name, workspace_name)
     sdk_call(lambda: dataset.get(), f"Fetching dataset {dataset_name}")
     emit(ctx, _iter_response_rows(dataset, client, user_name, status))
 
 
 @responses.command("export")
 @click.argument("dataset_name")
-@click.option("-o", "--output", "output_path", required=True, type=click.Path(dir_okay=False))
+@click.option("-o", "--output", "output_path", required=True, type=click.Path(dir_okay=False, allow_dash=True))
 @click.option("--user", "user_name", default=None, help="Only responses by this username.")
 @click.option("--status", type=click.Choice(STATUS_CHOICES), default=None, help="Only this status.")
+@with_workspace
 @with_account
 @click.pass_context
 def responses_export(
@@ -130,11 +134,12 @@ def responses_export(
     output_path: str,
     user_name: str | None,
     status: str | None,
+    workspace_name: str | None,
     account: str | None,
 ) -> None:
     """Write the dataset's responses as a JSONL file."""
     client = get_client(ctx)
-    dataset = find_dataset(client, dataset_name)
+    dataset = dataset_from_args(ctx, client, dataset_name, workspace_name)
     sdk_call(lambda: dataset.get(), f"Fetching dataset {dataset_name}")
     rows = _iter_response_rows(dataset, client, user_name, status)
     if output_path == "-":
@@ -145,9 +150,18 @@ def responses_export(
 
     if os.path.exists(output_path):
         raise ArgillaCLIError(f"{output_path} already exists; remove it or pick another name.")
-    with open(output_path, "w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    temp_path = output_path + ".partial"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        os.replace(temp_path, output_path)
+    except BaseException:
+        import contextlib
+
+        with contextlib.suppress(OSError):
+            os.unlink(temp_path)
+        raise
     emit(
         ctx,
         {
@@ -165,8 +179,8 @@ def responses_export(
 @click.argument("record_ref")
 @click.option("--answers", required=True, help='JSON object mapping question name to value, as in {"quality": "ok"}.')
 @click.option("--status", type=click.Choice(STATUS_CHOICES), default="submitted", show_default=True)
-@click.option("--user", "user_name", default=None, help="Submit as this user (owner or admin only). Default: you.")
 @click.option("--dry-run", is_flag=True, default=False, help="Show the response without submitting it.")
+@with_workspace
 @with_account
 @click.pass_context
 def responses_submit(
@@ -175,22 +189,24 @@ def responses_submit(
     record_ref: str,
     answers: str,
     status: str,
-    user_name: str | None,
     dry_run: bool,
+    workspace_name: str | None,
     account: str | None,
 ) -> None:
-    """Submit a response to one record of DATASET_NAME."""
+    """Submit a response to one record of DATASET_NAME, filed under your account.
+
+    The 2.8 server pins every response to the authenticated user, so there
+    is no --user here: an owner cannot file for someone else.
+    """
     enforce_profile("responses submit", profile_in_force(ctx))
     client = get_client(ctx)
-    dataset = find_dataset(client, dataset_name)
+    dataset = dataset_from_args(ctx, client, dataset_name, workspace_name)
     sdk_call(lambda: dataset.get(), f"Fetching dataset {dataset_name}")
     qmap = {question.name: question for question in dataset.settings.questions}
     answers_doc = _parse_answers(answers, qmap)
 
     record_id = _resolve_record_id(dataset, record_ref)
-    user_id = None
-    if user_name is not None:
-        user_id = find_user(client, user_name).id
+    enforce_record_in_dataset(client, dataset, record_id, dataset_name)
 
     # The model lives one level down in the SDK; the resource wrappers do
     # not re-export it. The server keys response values by question name.
@@ -199,7 +215,6 @@ def responses_submit(
     model = UserResponseModel(
         values={name: {"value": value} for name, value in answers_doc.items()},
         status=status,
-        user_id=user_id,
     )
     if dry_run:
         emit(
@@ -210,7 +225,6 @@ def responses_submit(
                 "record": record_ref,
                 "answers": answers_doc,
                 "status": status,
-                "user": user_name,
                 "dry_run": True,
             },
         )
@@ -218,7 +232,13 @@ def responses_submit(
     sdk_call(lambda: client.api.records.create_record_response(record_id, model), "Submitting response")
     emit(
         ctx,
-        {"action": "submit", "dataset": dataset_name, "record": record_ref, "answers": answers_doc, "status": status},
+        {
+            "action": "submit",
+            "dataset": dataset_name,
+            "record": record_ref,
+            "answers": answers_doc,
+            "status": status,
+        },
     )
 
 

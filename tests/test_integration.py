@@ -12,6 +12,8 @@ import os
 import socket
 import subprocess
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from uuid import uuid4
@@ -92,6 +94,18 @@ def ready(url: str) -> bool:
         return False
 
 
+def bootstrap_user_ready(url: str) -> bool:
+    """The server answers AND the bootstrap user can draw a token."""
+    if not ready(url):
+        return False
+    data = urllib.parse.urlencode({"username": OWNER_USERNAME, "password": OWNER_PASSWORD}).encode()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(f"{url}/api/v1/token", data=data), timeout=5) as response:
+            return response.status in (200, 201)
+    except (OSError, urllib.error.URLError):
+        return False
+
+
 def free_port() -> int:
     with socket.socket() as handle:
         handle.bind(("127.0.0.1", 0))
@@ -126,7 +140,7 @@ def server_url(tmp_path_factory) -> str:
         compose(project, "up", "-d")
         url = f"http://localhost:{port}"
         deadline = time.time() + 300
-        while not ready(url):
+        while not bootstrap_user_ready(url):
             if time.time() > deadline:
                 tail = compose(project, "logs", "--tail=40")
                 raise AssertionError(f"the Argilla stack did not become ready in 300s: {tail}")
@@ -147,7 +161,16 @@ def flow(tmp_path, server_url, isolated_config):
 class TestFullFlow:
     def test_login_with_password_then_full_flow(self, flow):
         url = flow["url"]
-        result = invoke(None, ["login", "--url", url, "--username", OWNER_USERNAME, "--password", OWNER_PASSWORD])
+        # The server briefly rejects logins while its user index settles.
+        result = None
+        for _attempt in range(5):
+            result = invoke(
+                None,
+                ["login", "--url", url, "--username", OWNER_USERNAME, "--password", OWNER_PASSWORD],
+            )
+            if result.exit_code == 0:
+                break
+            time.sleep(3)
         assert result.exit_code == 0, result.output
 
         result = invoke(None, ["--json", "whoami"])
@@ -189,6 +212,16 @@ class TestFullFlow:
         result = invoke(None, ["--json", "suggestions", "add", "it-ds", "--file", str(suggestions_file)])
         assert result.exit_code == 0, result.output
 
+        # Submit as the caller (the 2.8 server pins responses to the
+        # authenticated user; there is no filing for someone else) and
+        # check the response really landed under that name.
+        result = invoke(None, ["--json", "responses", "submit", "it-ds", "r2", "--answers", '{"quality": "fine"}'])
+        assert result.exit_code == 0, result.output
+        result = invoke(None, ["--json", "responses", "list", "it-ds", "--user", OWNER_USERNAME])
+        rows = json.loads(result.stdout)
+        assert rows, "the response did not land under the submitting user"
+        assert all(row["user"] == OWNER_USERNAME for row in rows)
+
         export_file = flow["tmp"] / "export.jsonl"
         result = invoke(None, ["--json", "datasets", "export", "it-ds", "-o", str(export_file)])
         assert result.exit_code == 0, result.output
@@ -215,7 +248,8 @@ class TestFullFlow:
         assert json.loads(result.stdout)["method"] == "api_key"
 
         # The key must never appear in the output.
-        result = invoke(None, ["--json", "account", "show"])
+        result = invoke(None, ["--json", "config", "show"])
+        assert result.exit_code == 0, result.output
         assert api_key not in result.output
         result = invoke(None, ["--json", "whoami"])
         assert api_key not in result.output
@@ -239,3 +273,25 @@ class TestFullFlow:
         rows = json.loads(result.stdout)
         assert len(rows) == 1
         assert rows[0]["fields"]["prompt"] == "hello"
+
+    def test_settings_dump_reapplies_without_touching_the_source(self, flow):
+        """The dump-and-reuse workflow must never write back to the source."""
+        url = flow["url"]
+        invoke(None, ["login", "--url", url, "--username", OWNER_USERNAME, "--password", OWNER_PASSWORD])
+        invoke(None, ["--json", "datasets", "create", "dump-src", "--settings", str(flow["settings"])])
+        invoke(None, ["--json", "datasets", "create", "dump-dst", "--settings", str(flow["settings"])])
+
+        dump_file = flow["tmp"] / "dump.json"
+        result = invoke(None, ["--json", "datasets", "get", "dump-src", "--settings", "-o", str(dump_file)])
+        assert result.exit_code == 0, result.output
+        document = json.loads(dump_file.read_text())
+        assert all("id" not in item for item in document["fields"])
+
+        result = invoke(None, ["--json", "datasets", "update", "dump-dst", "--settings", str(dump_file)])
+        assert result.exit_code == 0, result.output
+
+        result = invoke(None, ["--json", "datasets", "get", "dump-src"])
+        assert result.exit_code == 0, result.output
+        source = json.loads(result.stdout)
+        assert [field["name"] for field in source["fields"]] == ["prompt"]
+        assert [question["name"] for question in source["questions"]] == ["quality"]

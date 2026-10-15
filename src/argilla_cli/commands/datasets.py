@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import click
 
 from argilla_cli.commands.helpers import (
     ArgillaClient,
+    confirm_destructive,
+    dataset_from_args,
     default_workspace,
     find_dataset,
     find_workspace,
@@ -17,11 +20,12 @@ from argilla_cli.commands.helpers import (
     quiet_call,
     sdk_call,
     with_account,
+    with_workspace,
 )
 from argilla_cli.commands.responses import _status_label
 from argilla_cli.errors import ArgillaCLIError
-from argilla_cli.output import emit
-from argilla_cli.profiles import confirm_destructive, enforce_profile
+from argilla_cli.output import emit, wants_json
+from argilla_cli.profiles import enforce_profile
 
 if TYPE_CHECKING:
     from argilla import Dataset
@@ -134,11 +138,96 @@ def _settings_from_document(document: dict[str, Any]) -> Any:  # noqa: ANN401 --
     loader (its from_json calls it); it accepts the same shape as serialize."""
     import argilla as rg
 
-    settings = rg.Settings._from_dict(document)
+    return rg.Settings._from_dict(document)
+
+
+def _settings_for_create(document: dict[str, Any]) -> Any:  # noqa: ANN401 -- SDK Settings type is the boundary
+    """Settings for a fresh create: the server wants a bool, not null."""
+    settings = _settings_from_document(_clean_settings_document(document))
     if settings.allow_extra_metadata is None:
-        # The SDK's dataset update rejects None where the server wants a bool.
         settings.allow_extra_metadata = False
     return settings
+
+
+# Server-assigned keys that must never flow back into a write: an id in a
+# field or question makes the SDK PATCH the record the id names, even when
+# that dataset is a different one.
+_SERVER_ASSIGNED_KEYS = ("id", "dataset_id", "inserted_at", "updated_at")
+
+
+def _clean_settings_document(document: dict[str, Any]) -> dict[str, Any]:
+    """Strip server-assigned keys from a settings document, top level and items."""
+    cleaned: dict[str, Any] = {}
+    for key, value in document.items():
+        if key in _SERVER_ASSIGNED_KEYS:
+            continue
+        if isinstance(value, list):
+            cleaned[key] = [
+                {name: item_value for name, item_value in item.items() if name not in _SERVER_ASSIGNED_KEYS}
+                if isinstance(item, dict)
+                else item
+                for item in value
+            ]
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
+def _update_settings_from_document(
+    client: ArgillaClient,
+    dataset: Any,  # noqa: ANN401 -- SDK Dataset type is the boundary
+    document: dict[str, Any],
+    guidelines_flag: str | None = None,
+) -> None:
+    """Apply a settings document to a fetched dataset through the raw APIs.
+
+    The SDK's own Settings.update() rebuilds its resource objects on every
+    access, so ids injected into them do not survive to the write; a dump of
+    another dataset would CREATE its properties there. Going through the
+    group APIs keeps the write on the named dataset: an item the dataset
+    already has (by name) is PATCHed by its real id, a new item is created,
+    and dataset-level values the document leaves out keep their current
+    setting.
+    """
+    from argilla._models import DatasetModel
+    from argilla.settings._field import _field_from_dict
+    from argilla.settings._metadata import MetadataField
+    from argilla.settings._question import _question_from_dict
+    from argilla.settings._task_distribution import TaskDistribution
+    from argilla.settings._vector import VectorField
+
+    cleaned = _clean_settings_document(document)
+    current = dataset.settings  # fetched by the caller
+
+    for group, api, loader in (
+        ("fields", client.api.fields, _field_from_dict),
+        ("questions", client.api.questions, _question_from_dict),
+        ("vectors", client.api.vectors, VectorField.from_dict),
+        ("metadata", client.api.metadata, MetadataField.from_dict),
+    ):
+        ids_by_name = {item.name: item.id for item in getattr(current, group)}
+        for item_doc in cleaned.get(group, []):
+            model = loader(item_doc)._model
+            model.dataset_id = dataset.id
+            current_id = ids_by_name.get(model.name)
+            if current_id is not None:
+                model.id = current_id
+                sdk_call(partial(api.update, model), f"Updating {group}")
+            else:
+                sdk_call(partial(api.create, model), f"Adding to {group}")
+
+    if "distribution" in cleaned:
+        distribution = TaskDistribution.from_dict(cleaned["distribution"])._api_model()
+    else:
+        distribution = dataset._model.distribution
+    patch = DatasetModel(
+        id=dataset.id,
+        name=dataset.name,
+        guidelines=guidelines_flag if guidelines_flag is not None else cleaned.get("guidelines", dataset.guidelines),
+        allow_extra_metadata=cleaned.get("allow_extra_metadata", dataset.allow_extra_metadata),
+        distribution=distribution,
+    )
+    sdk_call(lambda: client.api.datasets.update(patch), "Updating dataset")
 
 
 @datasets.command("create")
@@ -194,7 +283,9 @@ def datasets_create(
 
     dataset = rg.Dataset(name=name, workspace=workspace, client=client)
     if settings_doc is not None:
-        dataset.settings = _settings_from_document(settings_doc)
+        # A dump from another dataset must not carry server-assigned ids: a
+        # fresh create would build properties pointing at the wrong rows.
+        dataset.settings = _settings_for_create(settings_doc)
     if guidelines is not None:
         dataset.settings.guidelines = guidelines
     sdk_call(lambda: dataset.create(), "Creating dataset")
@@ -219,22 +310,23 @@ def datasets_update(
     """Apply a settings document (and or guidelines) to the dataset NAME."""
     enforce_profile("datasets update", profile_in_force(ctx))
     client = get_client(ctx)
-    dataset = find_dataset(client, name, find_workspace(client, workspace_name) if workspace_name else None)
+    dataset = dataset_from_args(ctx, client, name, workspace_name)
     sdk_call(lambda: dataset.get(), f"Fetching dataset {name}")
     if not settings_path and guidelines is None:
         raise ArgillaCLIError("Nothing to update: pass --settings or --guidelines.")
     if settings_path:
-        dataset.settings = _settings_from_document(_load_settings_document(settings_path))
-    if guidelines is not None:
-        dataset.settings.guidelines = guidelines
-    sdk_call(lambda: dataset.update(), "Updating dataset")
+        # Raw group APIs: properties update in place by name, and values the
+        # document omits keep their current setting.
+        _update_settings_from_document(client, dataset, _load_settings_document(settings_path), guidelines)
+    elif guidelines is not None:
+        _update_settings_from_document(client, dataset, {}, guidelines)
     emit(ctx, {"action": "update", "resource": "dataset", "name": name})
 
 
 @datasets.command("delete")
 @click.argument("name")
 @click.option("--workspace", "workspace_name", default=None, help="The dataset's workspace, when ambiguous.")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
 @with_account
 @click.pass_context
 def datasets_delete(
@@ -246,9 +338,9 @@ def datasets_delete(
 ) -> None:
     """Delete the dataset NAME and its records."""
     enforce_profile("datasets delete", profile_in_force(ctx))
-    confirm_destructive("datasets delete", yes=yes, details=name)
+    confirm_destructive(ctx, "datasets delete", yes=yes, details=name)
     client = get_client(ctx)
-    dataset = find_dataset(client, name, find_workspace(client, workspace_name) if workspace_name else None)
+    dataset = dataset_from_args(ctx, client, name, workspace_name)
     sdk_call(lambda: dataset.delete(), "Deleting dataset")
     emit(ctx, {"action": "delete", "resource": "dataset", "name": name})
 
@@ -268,7 +360,7 @@ def datasets_progress(
 ) -> None:
     """Show the annotation progress on the dataset NAME."""
     client = get_client(ctx)
-    dataset = find_dataset(client, name, find_workspace(client, workspace_name) if workspace_name else None)
+    dataset = dataset_from_args(ctx, client, name, workspace_name)
     progress = sdk_call(
         lambda: dataset.progress(with_users_distribution=with_users),
         "Fetching progress",
@@ -295,15 +387,17 @@ def datasets_get(
 ) -> None:
     """Show the dataset NAME, optionally its full settings document."""
     client = get_client(ctx)
-    workspace = find_workspace(client, workspace_name) if workspace_name else None
-    dataset = find_dataset(client, name, workspace)
+    dataset = dataset_from_args(ctx, client, name, workspace_name)
     sdk_call(lambda: dataset.get(), f"Fetching dataset {name}")
-    resolved_name = workspace.name if workspace else _workspace_names(client).get(str(dataset._model.workspace_id))
+    resolved_name = _workspace_names(client).get(str(dataset._model.workspace_id))
     if not dump_settings:
         emit(ctx, _dataset_detail(dataset, resolved_name))
         return
 
-    document = dataset.settings.serialize()
+    document = _clean_settings_document(dataset.settings.serialize())
+    if wants_json(ctx):
+        # --json promises JSON on every command; --format yaml is for humans.
+        fmt = "json"
     if fmt == "yaml":
         import yaml
 
@@ -326,15 +420,31 @@ def _metadata_dict(metadata: Any) -> dict[str, Any]:  # noqa: ANN401 -- server m
     return {item.name: item.value for item in metadata or []}
 
 
-def _export_line(model: Any, qmap: dict[str, str], umap: dict[str, str]) -> dict[str, Any]:  # noqa: ANN401 -- a RecordModel crosses here
-    """One JSONL line: the flat record plus its responses."""
-    line: dict[str, Any] = {"id": model.external_id if model.external_id is not None else str(model.id)}
-    line.update(model.fields or {})
-    line.update(_metadata_dict(model.metadata))
+def _reserved(value: str, name: str) -> None:
+    """A field, metadata, or question name that the export format needs."""
+    raise ArgillaCLIError(f"A {value} named {name!r} collides with the export's own keys and cannot be exported.")
+
+
+def _suggestion_flat_values(model: Any, qmap: dict[str, str]) -> dict[str, Any]:  # noqa: ANN401 -- a RecordModel crosses here
+    """Suggestion values keyed by question name, reserved names refused."""
+    values: dict[str, Any] = {}
     for suggestion in model.suggestions or []:
         name = suggestion.question_name or qmap.get(str(suggestion.question_id))
         if name is not None:
-            line[name] = suggestion.value
+            if name in ("id", "responses"):
+                _reserved("question", name)
+            values[name] = suggestion.value
+    return values
+
+
+def _export_line(model: Any, qmap: dict[str, str], umap: dict[str, str]) -> dict[str, Any]:  # noqa: ANN401 -- a RecordModel crosses here
+    """One JSONL line: the flat record plus its responses."""
+    line: dict[str, Any] = {"id": model.external_id if model.external_id is not None else str(model.id)}
+    for name, value in {**(model.fields or {}), **_metadata_dict(model.metadata)}.items():
+        if name in ("id", "responses"):
+            _reserved("field or metadata", name)
+        line[name] = value
+    line.update(_suggestion_flat_values(model, qmap))
     rows = []
     for response in model.responses or []:
         for qid, payload in (response.values or {}).items():
@@ -377,7 +487,7 @@ def datasets_export(
     import os
 
     client = get_client(ctx)
-    dataset = find_dataset(client, name, find_workspace(client, workspace_name) if workspace_name else None)
+    dataset = dataset_from_args(ctx, client, name, workspace_name)
     sdk_call(lambda: dataset.get(), f"Fetching dataset {name}")
     qmap = {str(question.id): question.name for question in dataset.settings.questions}
     umap = {str(user.id): user.username for user in client.users}
@@ -385,10 +495,21 @@ def datasets_export(
         raise ArgillaCLIError(f"{output_path} already exists; remove it or pick another name.")
 
     count = 0
-    with open(output_path, "w", encoding="utf-8") as handle:
-        for record in dataset.records(with_suggestions=True, with_responses=True):
-            handle.write(json.dumps(_export_line(record._model, qmap, umap), ensure_ascii=False) + "\n")
-            count += 1
+    temp_path = output_path + ".partial"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            for record in dataset.records(with_suggestions=True, with_responses=True):
+                handle.write(json.dumps(_export_line(record._model, qmap, umap), ensure_ascii=False) + "\n")
+                count += 1
+        os.replace(temp_path, output_path)
+    except BaseException:
+        # A failed export must not leave a partial file behind that blocks
+        # the next run.
+        import contextlib
+
+        with contextlib.suppress(OSError):
+            os.unlink(temp_path)
+        raise
     emit(ctx, {"action": "export", "resource": "records", "dataset": name, "records": count, "output": output_path})
 
 
@@ -396,9 +517,17 @@ def datasets_export(
 @click.argument("name")
 @click.argument("file_path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--dry-run", is_flag=True, default=False, help="Count the records without sending them.")
+@with_workspace
 @with_account
 @click.pass_context
-def datasets_import(ctx: click.Context, name: str, file_path: str, dry_run: bool, account: str | None) -> None:
+def datasets_import(
+    ctx: click.Context,
+    name: str,
+    file_path: str,
+    dry_run: bool,
+    workspace_name: str | None,
+    account: str | None,
+) -> None:
     """Load records from FILE (as written by export) into the dataset NAME."""
     from argilla_cli.commands.records import _load_records
 
@@ -407,7 +536,7 @@ def datasets_import(ctx: click.Context, name: str, file_path: str, dry_run: bool
     responses = sum(len(item.get("responses") or []) for item in items)
     records = [{key: value for key, value in item.items() if key != "responses"} for item in items]
     client = get_client(ctx)
-    dataset = find_dataset(client, name)
+    dataset = dataset_from_args(ctx, client, name, workspace_name)
     if dry_run:
         emit(
             ctx,

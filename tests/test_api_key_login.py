@@ -37,7 +37,7 @@ def password_handler(request: httpx.Request) -> httpx.Response:
     return httpx.Response(404)
 
 
-class CredentialsMethod:
+class TestCredentialsMethod:
     def test_api_key_wins_over_password(self):
         creds = auth.Credentials(url=URL, password=PASSWORD, api_key=KEY)
         assert creds.method == "api_key"

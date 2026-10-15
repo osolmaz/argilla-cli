@@ -13,34 +13,50 @@ from typing import TYPE_CHECKING, Any, cast
 import click
 
 from argilla_cli.commands.helpers import (
-    find_dataset,
+    confirm_destructive,
+    dataset_from_args,
+    enforce_record_in_dataset,
     get_client,
     profile_in_force,
     sdk_call,
     with_account,
+    with_workspace,
 )
 from argilla_cli.errors import ArgillaCLIError
 from argilla_cli.output import emit
-from argilla_cli.profiles import confirm_destructive, enforce_profile
+from argilla_cli.profiles import enforce_profile
 
 if TYPE_CHECKING:
     from argilla._models import RecordModel
 
 
 def _load_records(file_path: str) -> list[dict[str, Any]]:
-    """Read records from a .json or .jsonl file, or stdin with -."""
+    """Read records from a .json or .jsonl file, or stdin with -.
+
+    The format is detected by content: text that parses as one JSON document
+    is one; otherwise each non-empty line must be a JSON object (JSONL).
+    """
     if file_path == "-":
         text = sys.stdin.read()
+        label = "<stdin>"
     else:
         with open(file_path, encoding="utf-8") as handle:
             text = handle.read()
+        label = file_path
 
     items: list[Any]
-    if file_path.endswith(".jsonl"):
-        items = [json.loads(line) for line in text.splitlines() if line.strip()]
-    else:
+    try:
         parsed = json.loads(text)
         items = [parsed] if isinstance(parsed, dict) else parsed
+    except json.JSONDecodeError:
+        items = []
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                items.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ArgillaCLIError(f"{label}: line {line_number} is not valid JSON: {exc}") from exc
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise ArgillaCLIError("Records must be a JSON array of objects (or JSONL, one object per line).")
     if not items:
@@ -81,13 +97,23 @@ def records() -> None:
 @records.command("add")
 @click.argument("dataset_name")
 @click.option(
-    "--file", "file_path", type=click.Path(dir_okay=False), default=None, help="A .json or .jsonl file, or - for stdin."
+    "--file",
+    "file_path",
+    type=click.Path(dir_okay=False, allow_dash=True),
+    default=None,
+    help="A .json or .jsonl file, or - for stdin.",
 )
 @click.option("--dry-run", is_flag=True, default=False, help="Count the records without sending them.")
+@with_workspace
 @with_account
 @click.pass_context
 def records_add(
-    ctx: click.Context, dataset_name: str, file_path: str | None, dry_run: bool, account: str | None
+    ctx: click.Context,
+    dataset_name: str,
+    file_path: str | None,
+    dry_run: bool,
+    workspace_name: str | None,
+    account: str | None,
 ) -> None:
     """Add (or upsert by id) the records from FILE into DATASET_NAME."""
     enforce_profile("records add", profile_in_force(ctx))
@@ -95,7 +121,7 @@ def records_add(
         raise ArgillaCLIError("Pass --file PATH with the records (use - to read stdin).")
     items = _load_records(file_path)
     client = get_client(ctx)
-    dataset = find_dataset(client, dataset_name)
+    dataset = dataset_from_args(ctx, client, dataset_name, workspace_name)
     if dry_run:
         emit(ctx, {"action": "add", "dataset": dataset_name, "records": len(items), "dry_run": True})
         return
@@ -109,6 +135,7 @@ def records_add(
 @click.argument("dataset_name")
 @click.option("--limit", type=int, default=20, show_default=True, help="How many records to show.")
 @click.option("--offset", type=int, default=0, show_default=True, help="Where to start in the record list.")
+@with_workspace
 @with_account
 @click.pass_context
 def records_list(
@@ -116,11 +143,12 @@ def records_list(
     dataset_name: str,
     limit: int,
     offset: int,
+    workspace_name: str | None,
     account: str | None,
 ) -> None:
     """List the records of DATASET_NAME, oldest first."""
     client = get_client(ctx)
-    dataset = find_dataset(client, dataset_name)
+    dataset = dataset_from_args(ctx, client, dataset_name, workspace_name)
     rows: list[dict[str, Any]] = []
     for record in dataset.records(start_offset=offset, limit=limit):
         model = record._model
@@ -134,18 +162,22 @@ def records_list(
 @records.command("get")
 @click.argument("dataset_name")
 @click.argument("record_id")
+@with_workspace
 @with_account
 @click.pass_context
-def records_get(ctx: click.Context, dataset_name: str, record_id: str, account: str | None) -> None:
+def records_get(
+    ctx: click.Context, dataset_name: str, record_id: str, workspace_name: str | None, account: str | None
+) -> None:
     """Show one record of DATASET_NAME by its server id."""
     from uuid import UUID
 
     client = get_client(ctx)
-    find_dataset(client, dataset_name)
+    dataset = dataset_from_args(ctx, client, dataset_name, workspace_name)
     try:
         record_uuid = UUID(record_id)
     except ValueError as exc:
         raise ArgillaCLIError(f"{record_id!r} is not a record id (expected a UUID).") from exc
+    enforce_record_in_dataset(client, dataset, record_uuid, dataset_name)
     model = sdk_call(lambda: client.api.records.get(record_uuid), "Fetching record")
     emit(ctx, _record_detail(model))
 
@@ -155,6 +187,7 @@ def records_get(ctx: click.Context, dataset_name: str, record_id: str, account: 
 @click.argument("record_id")
 @click.option("--fields", default=None, help="JSON object replacing the record's fields.")
 @click.option("--metadata", default=None, help="JSON object replacing the record's metadata.")
+@with_workspace
 @with_account
 @click.pass_context
 def records_update(
@@ -163,6 +196,7 @@ def records_update(
     record_id: str,
     fields: str | None,
     metadata: str | None,
+    workspace_name: str | None,
     account: str | None,
 ) -> None:
     """Replace the fields or metadata of one record."""
@@ -172,11 +206,12 @@ def records_update(
     from uuid import UUID
 
     client = get_client(ctx)
-    find_dataset(client, dataset_name)
+    dataset = dataset_from_args(ctx, client, dataset_name, workspace_name)
     try:
         record_uuid = UUID(record_id)
     except ValueError as exc:
         raise ArgillaCLIError(f"{record_id!r} is not a record id (expected a UUID).") from exc
+    enforce_record_in_dataset(client, dataset, record_uuid, dataset_name)
     model = sdk_call(lambda: client.api.records.get(record_uuid), "Fetching record")
     if fields is not None:
         model.fields = _parse_json_object(fields, "--fields")
@@ -189,21 +224,30 @@ def records_update(
 @records.command("delete")
 @click.argument("dataset_name")
 @click.argument("record_id")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@with_workspace
 @with_account
 @click.pass_context
-def records_delete(ctx: click.Context, dataset_name: str, record_id: str, yes: bool, account: str | None) -> None:
+def records_delete(
+    ctx: click.Context,
+    dataset_name: str,
+    record_id: str,
+    yes: bool,
+    workspace_name: str | None,
+    account: str | None,
+) -> None:
     """Delete one record of DATASET_NAME by its server id."""
     enforce_profile("records delete", profile_in_force(ctx))
-    confirm_destructive("records delete", yes=yes, details=record_id)
     from uuid import UUID
 
     client = get_client(ctx)
-    find_dataset(client, dataset_name)
+    dataset = dataset_from_args(ctx, client, dataset_name, workspace_name)
     try:
         record_uuid = UUID(record_id)
     except ValueError as exc:
         raise ArgillaCLIError(f"{record_id!r} is not a record id (expected a UUID).") from exc
+    enforce_record_in_dataset(client, dataset, record_uuid, dataset_name)
+    confirm_destructive(ctx, "records delete", yes=yes, details=f"{dataset_name} record {record_id}")
     sdk_call(lambda: client.api.records.delete(record_uuid), "Deleting record")
     emit(ctx, {"action": "delete", "resource": "record", "id": record_id})
 

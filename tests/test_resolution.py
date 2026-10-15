@@ -48,15 +48,24 @@ def test_flags_beat_everything(account_config):
     assert creds.password == "flagpass"
 
 
-def test_env_beats_account(account_config, monkeypatch):
+def test_env_url_with_a_different_servers_secret_is_refused(account_config, monkeypatch):
+    """Credentials resolve as a set: an env URL must not borrow the stored secret."""
     monkeypatch.setenv("ARGILLA_API_URL", "https://env.example.org")
     monkeypatch.setenv("ARGILLA_USERNAME", "envuser")
     monkeypatch.delenv("ARGILLA_PASSWORD", raising=False)
     monkeypatch.delenv("ARGILLA_API_KEY", raising=False)
+    with pytest.raises(auth.CredentialsError, match="must not be sent"):
+        auth.resolve_credentials(FakeCtx())
+
+
+def test_env_url_matching_the_account_url_keeps_its_secret(account_config, monkeypatch):
+    """The same URL through the environment is only a spelling change."""
+    monkeypatch.setenv("ARGILLA_API_URL", "https://studio.example.org")
+    monkeypatch.delenv("ARGILLA_USERNAME", raising=False)
+    monkeypatch.delenv("ARGILLA_PASSWORD", raising=False)
+    monkeypatch.delenv("ARGILLA_API_KEY", raising=False)
     creds = auth.resolve_credentials(FakeCtx())
-    assert creds.url == "https://env.example.org"
-    assert creds.username == "envuser"
-    # Password still comes from the account's credentials file.
+    assert creds.url == "https://studio.example.org"
     assert creds.password == "filepass"
 
 
@@ -104,8 +113,11 @@ def test_no_credentials_anywhere_gives_guidance(isolated_config):
 def test_profile_from_account_entry_and_flag_override(account_config):
     creds = auth.resolve_credentials(FakeCtx())
     assert creds.profile == "read-only"
+    # --profile can only tighten: a read-only account stays read-only.
     creds = auth.resolve_credentials(FakeCtx(obj={"profile": "full"}))
-    assert creds.profile == "full"
+    assert creds.profile == "read-only"
+    creds = auth.resolve_credentials(FakeCtx(obj={"profile": "read-only"}))
+    assert creds.profile == "read-only"
 
 
 def test_secrets_registered_for_redaction(account_config):

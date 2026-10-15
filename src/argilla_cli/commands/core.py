@@ -10,7 +10,7 @@ from argilla_cli import __version__, auth, masking
 from argilla_cli import config as config_mod
 from argilla_cli.commands import account as account_mod
 from argilla_cli.errors import ArgillaCLIError, CredentialsError
-from argilla_cli.output import emit
+from argilla_cli.output import emit, wants_json
 
 
 @click.command("whoami")
@@ -147,7 +147,7 @@ def doctor_cmd(ctx: click.Context) -> None:
 
 
 def _print_doctor(ctx: click.Context, checks: list[dict[str, str]]) -> None:
-    if ctx.obj and ctx.obj.get("use_json"):
+    if wants_json(ctx):
         ok = all(check["status"] != "fail" for check in checks)
         emit(ctx, {"ok": ok, "checks": checks})
         return

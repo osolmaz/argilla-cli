@@ -49,7 +49,7 @@ Writes need a `full`-profile account; a `read-only` profile refuses them.
 
 ```bash
 # Create a dataset from a settings file (JSON or YAML: fields, questions, ...);
-# --dry-run validates the document without touching the server
+# --dry-run prints the plan and writes nothing
 argilla-cli --json datasets create "My review" --workspace review --settings settings.json
 
 # Copy the settings of an existing dataset

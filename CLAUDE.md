@@ -36,8 +36,10 @@ uv run python scripts/check-mutation.py --min-kill-rate 65
 uvx --python 3.13 slophammer-py@0.4.0 dry .
 uvx --python 3.13 slophammer-py@0.4.0 check .
 
-# Dependency audit
-uvx pip-audit .
+# Dependency audit (the project's locked dependencies, without the project itself)
+uv export --no-hashes --format requirements-txt --output-file requirements-audit.txt
+grep -v '^-e ' requirements-audit.txt > requirements-audit.filtered
+uvx pip-audit --strict -r requirements-audit.filtered
 ```
 
 The mutation gate runs mutmut under `mutants/` (gitignored). It is a build cache: delete `mutants/` when test code changed but source did not, or mutmut replays stale results. slophammer-py needs Python >= 3.12, hence `--python 3.13` while the project supports 3.10.
@@ -55,7 +57,7 @@ The mutation gate runs mutmut under `mutants/` (gitignored). It is a build cache
 ## Testing
 
 - `tests/conftest.py` holds autouse fixtures: `no_network` (blocks real HTTP except for marked tests), `clean_secrets`, `isolated_config` (`ARGILLA_CLI_CONFIG` → tmp), plus `fake_ctx` (an isolated config with one API-key account and the `tests/fakes.py` in-memory client standing in for the SDK client).
-- Command tests drive the REAL `argilla` resource classes over that fake client — no network. `tests/test_integration.py` (marker `integration`, opt-in with `ARGILLA_CLI_INTEGRATION=1`) runs the official `argilla/argilla-server:v2.8.0` stack in Docker via Compose, pinned by digest. `tests/test_studio_smoke.py` (marker `studio`, opt-in with `ARGILLA_CLI_STUDIO=1`) is a read-only smoke test against the studio with `--credentials-file`.
+- Command tests drive the REAL `argilla` resource classes over that fake client — no network. `tests/test_integration.py` (marker `integration`, opt-in with `ARGILLA_CLI_INTEGRATION=1`) runs the official `argilla/argilla-server:v2.8.0` stack in Docker via Compose; the server image is resolved to its digest at run time. `tests/test_studio_smoke.py` (marker `studio`, opt-in with `ARGILLA_CLI_STUDIO=1`) is a read-only smoke test against the studio with `--credentials-file`.
 - Integration and studio tests are excluded by default (`addopts` in `pyproject.toml`).
 
 ## Conventions

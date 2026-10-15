@@ -9,16 +9,19 @@ import click
 if TYPE_CHECKING:
     from argilla import Role, User
 
+from argilla_cli.commands.account import has_terminal_stdin
 from argilla_cli.commands.helpers import (
+    confirm_destructive,
     find_user,
     get_client,
     profile_in_force,
     sdk_call,
     with_account,
 )
+from argilla_cli.errors import ArgillaCLIError
 from argilla_cli.masking import register_secrets
 from argilla_cli.output import emit
-from argilla_cli.profiles import confirm_destructive, enforce_profile
+from argilla_cli.profiles import enforce_profile
 
 ROLE_CHOICES = ("owner", "admin", "annotator")
 
@@ -86,9 +89,21 @@ def users_create(
     account: str | None,
 ) -> None:
     """Create a user."""
+    # The command's own --username and --password name the NEW user; they
+    # are not credentials for this invocation. Drop them before anything
+    # resolves credentials, or the CLI would try to log in as a user that
+    # does not exist yet.
+    ctx.params.pop("username", None)
+    ctx.params.pop("password", None)
     enforce_profile("users create", profile_in_force(ctx))
     if password is None:
-        password = click.prompt(f"Password for {username}", hide_input=True)
+        if dry_run:
+            # A dry run must not stop to ask for a secret it will not use.
+            password = ""
+        elif not has_terminal_stdin():
+            raise ArgillaCLIError("No password for the new user. Pass --password, or run this in a terminal.")
+        else:
+            password = click.prompt(f"Password for {username}", hide_input=True)
     register_secrets([password])
     client = get_client(ctx)
     if dry_run:
@@ -123,13 +138,14 @@ def users_create(
 
 @users.command("delete")
 @click.argument("username")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
 @with_account
 @click.pass_context
 def users_delete(ctx: click.Context, username: str, yes: bool, account: str | None) -> None:
     """Delete the user named USERNAME."""
     enforce_profile("users delete", profile_in_force(ctx))
-    confirm_destructive("users delete", yes=yes, details=username)
+
+    confirm_destructive(ctx, "users delete", yes=yes, details=username)
     client = get_client(ctx)
     user = find_user(client, username)
     sdk_call(lambda: user.delete(), "Deleting user")

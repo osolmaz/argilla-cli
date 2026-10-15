@@ -143,10 +143,19 @@ class TestUsersCreate:
         assert row["role"] == "annotator"
         assert [user.username for user in fake_ctx.api.users.models] == ["bob"]
 
-    def test_create_prompts_for_password(self, fake_ctx):
+    def test_create_prompts_for_password(self, fake_ctx, monkeypatch):
+        from argilla_cli.commands import users as users_mod
+
+        monkeypatch.setattr(users_mod, "has_terminal_stdin", lambda: True)
         result = invoke(fake_ctx, ["users", "create", "--username", "bob"], input="pw-bob\n")
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert [user.username for user in fake_ctx.api.users.models] == ["bob"]
+
+    def test_create_without_a_terminal_needs_a_password(self, fake_ctx):
+        result = invoke(fake_ctx, ["--json", "users", "create", "--username", "bob"])
+        assert result.exit_code == 1, result.output
+        assert "--password" in result.output
+        assert fake_ctx.api.users.models == []
 
     def test_create_dry_run_makes_no_changes(self, fake_ctx):
         result = invoke(

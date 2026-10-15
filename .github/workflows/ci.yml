@@ -40,7 +40,13 @@ jobs:
 
       - name: Audit dependencies
         if: matrix.python-version == '3.13'
-        run: uvx pip-audit --strict
+        # Audit the project's own locked dependencies, not the audit tool's
+        # environment: a bare `pip-audit` audits sys.executable's env. The
+        # project itself is not on PyPI and drops out of the audit.
+        run: |
+          uv export --no-hashes --format requirements-txt --output-file requirements-audit.txt
+          grep -v '^-e ' requirements-audit.txt > requirements-audit.filtered
+          uvx pip-audit --strict -r requirements-audit.filtered
 
       # slophammer-py needs Python >= 3.12; the matrix python only governs
       # the project env, not the tool env.
