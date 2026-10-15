@@ -23,13 +23,13 @@ $ argilla-cli --json workspaces list
 
 ## Install
 
-Requires Python 3.10 or newer. With [uv](https://docs.astral.sh/uv/):
+Requires Python 3.10 or newer. With [uv](https://docs.astral.sh/uv/), install from this repository (the package is not on PyPI):
 
 ```bash
-uv tool install argilla-cli
+uv tool install git+https://github.com/osolmaz/argilla-cli
 ```
 
-or from a checkout of this repository:
+or from a local checkout:
 
 ```bash
 uv sync --dev
