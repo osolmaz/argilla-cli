@@ -14,7 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.13"]
+        # Latest stable Python only; the package still supports >=3.10.
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +40,6 @@ jobs:
         run: uv run pytest --cov --cov-fail-under=85
 
       - name: Audit dependencies
-        if: matrix.python-version == '3.13'
         # Audit the project's own locked dependencies, not the audit tool's
         # environment: a bare `pip-audit` audits sys.executable's env. The
         # project itself is not on PyPI and drops out of the audit.
@@ -54,7 +54,6 @@ jobs:
         run: uvx --python 3.13 slophammer-py@${SLOPHAMMER_VERSION} dry .
 
       - name: Mutation gate
-        if: matrix.python-version == '3.13'
         run: uv run python scripts/check-mutation.py --min-kill-rate 65
 
       - name: Slophammer conformance
